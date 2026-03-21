@@ -97,17 +97,17 @@ def main():
     )
     parser.add_argument(
         "--api-key",
-        help="Tavily API key (defaults to TAVILY_KEY env var)",
+        help="Tavily API key (defaults to TAVILY_API_KEY env var)",
     )
     
     args = parser.parse_args()
     
     # Get API key from args or env var - REQUIRED
-    api_key = args.api_key or os.environ.get("TAVILY_KEY")
+    api_key = args.api_key or os.environ.get("TAVILY_API_KEY")
     
     if not api_key:
         print("Error: No Tavily API key provided", file=sys.stderr)
-        print("Set TAVILY_KEY environment variable or pass --api-key", file=sys.stderr)
+        print("Set TAVILY_API_KEY environment variable or pass --api-key", file=sys.stderr)
         sys.exit(1)
     
     results = search(
