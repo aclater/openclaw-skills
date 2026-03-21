@@ -11,14 +11,13 @@ import argparse
 from typing import Optional
 import requests
 
-# API configuration
-TAVILY_API_KEY = ""
+# API configuration - MUST use environment variable
 TAVILY_API_ENDPOINT = "https://api.tavily.com/search"
 
 
 def search(
     query: str,
-    api_key: str = TAVILY_API_KEY,
+    api_key: str,
     include_answer: bool = False,
     max_results: int = 5,
     include_raw_content: bool = False,
@@ -98,19 +97,17 @@ def main():
     )
     parser.add_argument(
         "--api-key",
-        help="Tavily API key (defaults to TAVILY_KEY env var or embedded key)",
+        help="Tavily API key (defaults to TAVILY_KEY env var)",
     )
     
     args = parser.parse_args()
     
-    # Get API key from args, env var, or default
-    api_key = (
-        args.api_key
-        or os.environ.get("TAVILY_KEY", TAVILY_API_KEY)
-    )
+    # Get API key from args or env var - REQUIRED
+    api_key = args.api_key or os.environ.get("TAVILY_KEY")
     
     if not api_key:
         print("Error: No Tavily API key provided", file=sys.stderr)
+        print("Set TAVILY_KEY environment variable or pass --api-key", file=sys.stderr)
         sys.exit(1)
     
     results = search(
