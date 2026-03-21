@@ -1,7 +1,7 @@
 # Vibe Kingdom — OpenClaw-Native Workflow Design
 
 **Date:** 2026-03-21
-**Status:** Approved
+**Status:** Approved (updated 2026-03-21)
 
 ## Problem
 
@@ -9,7 +9,7 @@ The current workflow writes generated posts to a local CSV file for manual copy/
 
 ## Goal
 
-Replace the CSV export step with an end-to-end workflow inside OpenClaw: a dedicated vibe-kingdom agent runs fetch/generate on a cron schedule, presents draft posts conversationally, accepts approvals, and pushes approved posts directly to Buffer for LinkedIn scheduling.
+Replace the CSV export step with an end-to-end workflow inside OpenClaw: a dedicated vibe-kingdom agent runs fetch/generate on a cron schedule, presents draft posts conversationally, accepts approvals, and pushes approved posts directly to Buffer for LinkedIn and Bluesky scheduling.
 
 ---
 
@@ -30,28 +30,31 @@ The agent definition and cron job are one-time manual setup steps the user perfo
 
 ### 1. vibe-kingdom.js — Tool Library
 
-The script remains CLI-runnable. The existing `set-status <id> <status>` command is **retained for manual/backward-compatible use only** — it does NOT trigger a Buffer push regardless of the status value set. New dedicated commands are the primary approval mechanism:
+The script remains CLI-runnable. The existing `set-status <id> <status>` command is **retained for manual/backward-compatible use only** — it does NOT trigger a Buffer push regardless of the status value set. Approval and publishing are deliberately separated into two stages:
 
 | Command | Behaviour |
 |---|---|
-| `fetch-signals` | Existing — discovers signals from communities |
-| `generate-posts [--count N]` | Existing — generates N draft posts |
-| `list-posts [--status S]` | Existing — lists posts with ID, status, source, preview |
-| `show-post <id>` | Existing — shows full post content |
-| `set-status <id> <status>` | Existing — updates status only, no Buffer push |
-| `approve <id>` | **New** — marks post approved only, does NOT push to Buffer |
-| `approve-all [--count N]` | **New** — marks up to N draft posts approved (default 3), ascending by post ID, does NOT push to Buffer |
-| `reject <id>` | **New** — marks post rejected in posts.json, no Buffer push |
-| `push <id>` | **New** — pushes a single approved post to Buffer at next available slot |
+| `fetch-signals` | Discovers signals from configured communities |
+| `generate-posts [--count N]` | Generates N draft posts (default 5), skipping any signal where the LLM returns an error |
+| `list-posts [--status S]` | Lists posts with ID, status, source, preview, and scheduled time |
+| `show-post <id>` | Shows full post content, scheduled time, and Buffer IDs |
+| `set-status <id> <status>` | Updates status only, no Buffer push |
+| `approve <id>` | Marks post approved — does NOT push to Buffer |
+| `approve-all [--count N]` | Marks up to N drafts approved ascending by post ID (default 3) — does NOT push to Buffer |
+| `reject <id>` | Marks post rejected in posts.json, no Buffer push |
+| `push <id>` | Pushes a single approved post to Buffer at the next available slot |
+| `regenerate-post <id>` | Regenerates post content from original signal; exits with error if LLM fails |
 
-**Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed or introduced — `os.homedir()` returns the correct path whether the script is run by the openclaw container user or a developer on their local machine.
+**Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed.
 
 **Buffer integration (`push`):**
-- Verify current endpoint before implementation; historically `POST https://api.bufferapp.com/1/updates/create.json` — check Buffer's developer docs for the current publishing endpoint before coding.
-- Auth: `BUFFER_ACCESS_TOKEN` env var
-- Target profile: `BUFFER_PROFILE_ID` env var (LinkedIn profile ID in Buffer)
-- Scheduling: compute next available slot using `nextBufferSlot()` (see below), pass as `scheduled_at` in ISO 8601
-- On success: update post record with `buffer_update_id` and `scheduled_at`
+- API: GraphQL at `POST https://api.buffer.com/` (root path)
+- Mutation: `createPost(input: CreatePostInput!)` returning `PostActionPayload` union
+- Auth: `Bearer ${BUFFER_ACCESS_TOKEN}` header
+- Channel targeting: `BUFFER_CHANNEL_ID` env var — comma-separated list for multi-channel (e.g. `LINKEDIN_ID,BLUESKY_ID`). One API call is made per channel at the same computed slot.
+- Scheduling: compute next available slot using `nextBufferSlot()`, pass as `dueAt` in ISO 8601
+- Mode: `customScheduled`, `schedulingType: automatic`
+- On success: update post record with `scheduled_at` and `buffer_update_ids` array (one entry per channel)
 
 **Slot scheduling algorithm (`nextBufferSlot`):**
 
@@ -65,6 +68,15 @@ Ensures no two posts share the same scheduled time:
 6. Timezone: read from `config.buffer.timezone` (default `America/New_York`)
 
 Pushing three posts in a row will schedule them at e.g. Tue 4:00pm, Tue 4:15pm, Tue 4:30pm — spilling across days if the window fills up.
+
+**LLM error handling:**
+
+`generatePostFromSignal` throws (rather than returning error text) if:
+- The response starts with `{` or `[` (JSON error payload)
+- The response contains `"type":"error"` (API error shape)
+- The response is under 50 characters
+
+`generate-posts` skips failed signals with a `SKIPPED` notice — no error text is ever saved to posts.json. `regenerate-post` exits with the error message rather than overwriting the existing post.
 
 ---
 
@@ -81,7 +93,7 @@ node ~/.openclaw/skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js
 - `ANTHROPIC_API_KEY`
 - `TAVILY_API_KEY`
 - `BUFFER_ACCESS_TOKEN`
-- `BUFFER_PROFILE_ID`
+- `BUFFER_CHANNEL_ID`
 
 **System prompt:**
 ```
@@ -92,15 +104,21 @@ Buffer.
 When presenting draft posts: list them numerically with ID, source, and first
 40 words. Keep it scannable.
 
-Accept approval commands:
-- "approve <id>" — approve a single post and queue to Buffer
-- "approve all" — natural-language trigger; call the approve-all command
-  (do NOT create a space-separated CLI branch)
+Two-stage workflow — approval and publishing are separate steps:
+
+Stage 1 — Review and approve:
+- "approve <id>" — mark a single post as approved (does NOT push to Buffer)
+- "approve all" — mark all drafts as approved (calls approve-all command)
 - "reject <id>" — reject a post
 - "show <id>" — show full post content
 
-After each approval, confirm the Buffer scheduled time. After reviewing all
-posts, summarise what was queued and what was rejected.
+Stage 2 — Push to Buffer:
+- "push <id>" — push an approved post to Buffer (calls push command)
+- "push all approved" — push all approved posts to Buffer one by one
+
+After each Buffer push, confirm the scheduled time. After reviewing all
+posts, summarise what was approved, what was rejected, and what was queued
+to Buffer.
 
 Stay focused on the content pipeline. Do not engage in general conversation.
 ```
@@ -128,6 +146,7 @@ Cron fires (Mon/Thu 8am)
   → OpenClaw wakes vibe-kingdom agent (isolated session)
   → agent calls: vibe-kingdom.js fetch-signals
   → agent calls: vibe-kingdom.js generate-posts --count 5
+    → each signal generates a post; failed LLM responses are skipped (not saved)
   → agent calls: vibe-kingdom.js list-posts --status draft
   → agent presents posts in session (numbered, scannable)
 
@@ -145,8 +164,8 @@ User opens vibe-kingdom session
   → user says "push 3" (or "push all approved")
   → agent calls: vibe-kingdom.js push 3
     → nextBufferSlot() computes next available Tue/Wed/Fri 4–5pm slot
-    → Buffer API called, scheduled_at = computed slot
-    → post record updated with buffer_update_id + scheduled_at
+    → Buffer GraphQL API called for each channel in BUFFER_CHANNEL_ID
+    → post record updated with scheduled_at + buffer_update_ids
     → agent confirms: "Post 3 queued for Wednesday 4:15pm"
 ```
 
@@ -154,10 +173,17 @@ User opens vibe-kingdom session
 
 ## Configuration
 
-New keys added to `~/.openclaw/vibe-kingdom/config.json`:
+`~/.openclaw/vibe-kingdom/config.json`:
 
 ```json
 {
+  "domains": ["cybersecurity", "kubernetes", "devops", "federal government IT", "open source"],
+  "communities": {
+    "reddit": ["r/devops", "r/kubernetes", "r/cybersecurity", "r/netsec", "r/sysadmin"],
+    "hn": true,
+    "devto": true,
+    "github": true
+  },
   "buffer": {
     "timezone": "America/New_York",
     "schedule": {
@@ -175,10 +201,10 @@ New keys added to `~/.openclaw/vibe-kingdom/config.json`:
 ## What Changes in vibe-kingdom.js
 
 ### Approval and Buffer commands
-1. Add `approve <id>` command: update status to `approved` only — does NOT call `bufferPush`
+1. Add `approve <id>` command: update status to `approved` only — does NOT push to Buffer
 2. Add `approve-all [--count N]` command: load up to N drafts sorted ascending by post ID, mark each approved — does NOT push to Buffer
 3. Add `reject <id>` command: update status to `rejected`
-4. Add `bufferPush(id)` function: call `nextBufferSlot()`, POST to Buffer API, update post record
+4. Add `push <id>` command: call `nextBufferSlot()`, POST to Buffer GraphQL API for each channel, update post record
 5. Add `nextBufferSlot(config)` function: iterate Tue/Wed/Fri 4–5pm windows, avoid occupied timestamps
 6. Load Buffer config from `config.buffer` block
 7. `set-status` unchanged — does not trigger Buffer
@@ -186,32 +212,30 @@ New keys added to `~/.openclaw/vibe-kingdom/config.json`:
 ### Post generation improvements
 
 **A. Include source URL in every post.**
-The signal's URL is already passed in the user prompt (`URL: ${signal.url}`). Add an explicit instruction: *"End every post with the source URL on its own line. No label, just the URL."* This gives readers context and drives traffic to the original discussion.
+The signal's URL is already passed in the user prompt (`URL: ${signal.url}`). Add an explicit instruction: *"End every post with the source URL on its own line. No label, just the URL."*
 
-**B. Token limit too low.** `callClaude(..., 512)` in `generatePostFromSignal` truncates posts mid-thought. Change to **1024 tokens** for post generation calls.
+**B. Token limit.** `callClaude(..., 1024)` in `generatePostFromSignal` for post generation calls.
 
-**C. Opener repetition.** The system prompt passes `Openers: ${profile.openers.join(' | ')}`, causing Claude to default to the first item ("Been thinking about..."). The API error fallback also always uses `openers[0]`. Fix:
-- Remove the `Openers:` line from the system prompt entirely
-- Replace with: *"Vary openers naturally — sometimes lead with a direct observation, sometimes with a question, sometimes mid-story. Never open with 'Been thinking about'. Never start two posts with the same phrase."*
-- Remove `openers[0]` from the error fallback; surface the error message cleanly instead
+**C. Opener variety.** Remove the `Openers:` line from the system prompt. Replace with: *"Vary openers naturally — sometimes lead with a direct observation, sometimes with a question, sometimes mid-story. Never open with 'Been thinking about'. Never start two posts with the same phrase."*
 
-**D. No structural guidance.** Posts come out as one dense block or a single truncated sentence. Add to the system prompt:
-- *"A good post has 2–4 short paragraphs. First: one concrete observation or hook. Middle: the insight or tension — what's actually hard about this. End: what it means for practitioners, or a question that invites response."*
-- *"Vary length naturally: some posts are 80 words and direct, some are 200–250 words and walk through reasoning."*
-- *"Plain text only. No bullet lists. No headers. No hashtags. No emojis. Write the way a senior engineer talks to a peer, not the way a marketer writes content."*
+**D. Structural guidance.** Add to the system prompt:
+- *"A good post has 2–4 short paragraphs. First: one concrete observation or hook. Middle: the insight or tension. End: what it means for practitioners, or a question that invites response."*
+- *"Plain text only. No bullet lists. No headers. No hashtags. No emojis."*
+
+**E. LLM error handling.** `generatePostFromSignal` throws if the response looks like an error payload, is JSON, or is under 50 characters. `generate-posts` skips failed signals rather than saving error text to posts.json.
 
 ---
 
 ## What's in README.md
 
-The README must document the following clearly, as these are the only manual steps required of the user:
+The README documents the following clearly, as these are the only manual steps required of the user:
 
 1. **Prerequisites** — Node.js, an OpenClaw instance with this skill installed
 2. **Required API keys** — with links to where to obtain each:
    - `ANTHROPIC_API_KEY` — [console.anthropic.com](https://console.anthropic.com)
    - `TAVILY_API_KEY` — [app.tavily.com](https://app.tavily.com)
-   - `BUFFER_ACCESS_TOKEN` — Buffer app settings → Developer → Access Token
-   - `BUFFER_PROFILE_ID` — Buffer profile ID for your LinkedIn account
+   - `BUFFER_ACCESS_TOKEN` — Buffer → Settings → Apps & API → Access Token
+   - `BUFFER_CHANNEL_ID` — comma-separated Buffer channel IDs (LinkedIn, Bluesky, etc.)
 3. **Where to set the keys** — in OpenClaw's environment/secrets UI (not in the skill config files)
 4. **One-time agent setup** — copy-paste values for agent name, tool command, system prompt, and env vars
 5. **One-time cron setup** — copy-paste values for the cron job
@@ -221,7 +245,6 @@ The README must document the following clearly, as these are the only manual ste
 ## Out of Scope
 
 - LinkedIn direct API (Buffer handles this)
-- Post editing in OpenClaw (use `regenerate-post` CLI if needed)
-- Multi-platform posting (LinkedIn only for now)
+- Post editing in OpenClaw (use `regenerate-post` if needed)
 - Analytics/engagement tracking
 - Automatic openclaw.json configuration (user sets up agent and cron manually via UI)
