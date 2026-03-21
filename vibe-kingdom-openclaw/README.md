@@ -71,7 +71,7 @@ Stay focused on the content pipeline. Do not engage in general conversation.
 - `ANTHROPIC_API_KEY`
 - `TAVILY_API_KEY`
 - `BUFFER_ACCESS_TOKEN`
-- `BUFFER_PROFILE_ID`
+- `BUFFER_CHANNEL_ID`
 
 ### 3. Create the cron job
 
