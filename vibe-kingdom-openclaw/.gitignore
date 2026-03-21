@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+*.npm
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# OpenClaw data (never commit)
+.openclaw/
+vibe-data/
+~/.openclaw/
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Build
+dist/
+build/
