@@ -73,7 +73,12 @@ function loadConfig() {
         'supply chain', 'vulnerability', 'patch', 'open source', 'networking'
       ]
     },
-    voice: { tone: 'pragmatic', style: 'grounded_architect', maxWordCount: 280, varyLength: true }
+    voice: { tone: 'pragmatic', style: 'grounded_architect', maxWordCount: 280, varyLength: true },
+    buffer: {
+      timezone: 'America/New_York',
+      schedule: { days: ['tuesday', 'wednesday', 'friday'], windowStart: '16:00', windowEnd: '17:00', slotIntervalMinutes: 15 },
+      blueskyChannelIds: []
+    }
   };
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2));
   return defaultConfig;
@@ -270,8 +275,18 @@ async function bufferPush(postId) {
 
   const config = loadConfig();
   const tz = config.buffer?.timezone || 'America/New_York';
+  const blueskyChannelIds = new Set(config.buffer?.blueskyChannelIds || []);
   const occupiedIso = posts.filter(p => p.scheduled_at && p.id !== postId).map(p => p.scheduled_at);
   const scheduledAt = nextBufferSlot(occupiedIso, new Date(), tz);
+
+  // Choose content per channel: Bluesky channels get the short version
+  const contentForChannel = (channelId) => {
+    if (blueskyChannelIds.has(channelId)) {
+      if (!post.bluesky_content) throw new Error(`Post ${postId} has no Bluesky content. Run regenerate-post ${postId} to generate it.`);
+      return post.bluesky_content;
+    }
+    return post.content;
+  };
 
   if (process.env.BUFFER_DRY_RUN === '1') {
     post.scheduled_at = scheduledAt;
@@ -280,7 +295,7 @@ async function bufferPush(postId) {
     return { dry_run: true, post_id: postId, scheduled_at: scheduledAt, channels: channelIds.length };
   }
 
-  const results = await Promise.all(channelIds.map(id => bufferPushToChannel(token, id, post.content, scheduledAt)));
+  const results = await Promise.all(channelIds.map(id => bufferPushToChannel(token, id, contentForChannel(id), scheduledAt)));
 
   post.scheduled_at = scheduledAt;
   post.buffer_update_ids = results.map((r, i) => ({ channel_id: channelIds[i], buffer_update_id: r.buffer_update_id }));
@@ -787,6 +802,39 @@ Return a JSON object with exactly these fields:
 // ─────────────────────────────────────────────────────────────────────────────
 // Post generation
 
+async function generateBlueSkyPost(signal, profile) {
+  const systemPrompt = `You are writing a Bluesky post for ${profile.name} at ${profile.employer}.
+
+Bluesky has a strict 300-character limit including the URL. Budget ~50 chars for the URL, leaving ~245 chars for your text.
+
+Voice: ${profile.tone}
+Plain text only. No hashtags. No emojis. One sharp, direct observation — no padding.
+End with the source URL on its own line.`;
+
+  const userPrompt = `Write a Bluesky post (max 245 chars of text, then URL on its own line) inspired by this signal:
+
+Title: ${signal.title}
+URL: ${signal.url}
+Content: ${(signal.content || '').substring(0, 400)}
+
+One sentence or two at most. Make it punchy. Do not summarize — add a genuine take.
+End with: ${signal.url}`;
+
+  const raw = await callClaude(userPrompt, systemPrompt, 256);
+
+  if (raw.startsWith('{') || raw.startsWith('[') || raw.toLowerCase().includes('"type":"error"')) {
+    throw new Error(`LLM returned an error response instead of Bluesky post content: ${raw.substring(0, 120)}`);
+  }
+  if (raw.trim().length < 20) {
+    throw new Error(`LLM returned suspiciously short Bluesky content (${raw.trim().length} chars)`);
+  }
+  if (raw.trim().length > 300) {
+    throw new Error(`Generated Bluesky post is ${raw.trim().length} chars (limit 300): ${raw.trim()}`);
+  }
+
+  return raw.trim();
+}
+
 async function generatePostFromSignal(signal, profile, style = null) {
   const styleHint = style === 'shorter'
     ? 'Write a tight, direct post under 100 words. One sharp observation, nothing more.'
@@ -1029,12 +1077,18 @@ async function cmdGeneratePosts(args) {
   const newPosts = [];
   for (const signal of available) {
     process.stdout.write(`  Generating from [${signal.source}] ${signal.title.substring(0, 50)}... `);
-    let content;
+    let content, bluesky_content;
     try {
       content = await generatePostFromSignal(signal, profile);
     } catch (e) {
-      console.log(`SKIPPED (${e.message})`);
+      console.log(`SKIPPED (LinkedIn: ${e.message})`);
       continue;
+    }
+    try {
+      bluesky_content = await generateBlueSkyPost(signal, profile);
+    } catch (e) {
+      process.stderr.write(`  Bluesky generation failed for signal ${signal.id}: ${e.message}\n`);
+      bluesky_content = null;
     }
     const post = {
       id: nextId([...existingPosts, ...newPosts]),
@@ -1043,6 +1097,7 @@ async function cmdGeneratePosts(args) {
       signal_source: signal.source,
       signal_url: signal.url,
       content,
+      bluesky_content,
       status: 'draft',
       created_at: new Date().toISOString(),
       approved_at: null,
@@ -1101,7 +1156,15 @@ function cmdShowPost(args) {
     console.log(`Scheduled: ${post.scheduled_at} (Buffer IDs: ${ids})`);
   }
   console.log();
+  console.log('── LinkedIn ─────────────────────────────────────────');
   console.log(post.content);
+  if (post.bluesky_content) {
+    console.log(`\n── Bluesky (${post.bluesky_content.length} chars) ──────────────────────────────`);
+    console.log(post.bluesky_content);
+  } else {
+    console.log('\n── Bluesky ──────────────────────────────────────────');
+    console.log('(no Bluesky version — run regenerate-post to generate one)');
+  }
   console.log();
 }
 
@@ -1204,7 +1267,17 @@ async function cmdRegeneratePost(args) {
     process.exit(1);
   }
 
+  let newBlueSkyContent;
+  try {
+    newBlueSkyContent = await generateBlueSkyPost(signal, profile);
+    console.log(`Bluesky version generated (${newBlueSkyContent.length} chars)`);
+  } catch (e) {
+    process.stderr.write(`Bluesky regeneration failed: ${e.message}\n`);
+    newBlueSkyContent = post.bluesky_content || null;
+  }
+
   post.content = newContent;
+  post.bluesky_content = newBlueSkyContent;
   post.status = 'draft';
   post.created_at = new Date().toISOString();
   post.approved_at = null;

@@ -35,15 +35,15 @@ The script remains CLI-runnable. The existing `set-status <id> <status>` command
 | Command | Behaviour |
 |---|---|
 | `fetch-signals` | Discovers signals from configured communities |
-| `generate-posts [--count N]` | Generates N draft posts (default 5), skipping any signal where the LLM returns an error |
+| `generate-posts [--count N]` | Generates N draft posts (default 5) — each post includes a LinkedIn version and a Bluesky version (≤300 chars). Skips signals where the LinkedIn LLM call fails. |
 | `list-posts [--status S]` | Lists posts with ID, status, source, preview, and scheduled time |
 | `show-post <id>` | Shows full post content, scheduled time, and Buffer IDs |
 | `set-status <id> <status>` | Updates status only, no Buffer push |
 | `approve <id>` | Marks post approved — does NOT push to Buffer |
 | `approve-all [--count N]` | Marks up to N drafts approved ascending by post ID (default 3) — does NOT push to Buffer |
 | `reject <id>` | Marks post rejected in posts.json, no Buffer push |
-| `push <id>` | Pushes a single approved post to Buffer at the next available slot |
-| `regenerate-post <id>` | Regenerates post content from original signal; exits with error if LLM fails |
+| `push <id>` | Pushes a single approved post to Buffer — LinkedIn channels get `content`, Bluesky channels get `bluesky_content` |
+| `regenerate-post <id>` | Regenerates both LinkedIn and Bluesky versions from the original signal |
 
 **Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed.
 
@@ -52,6 +52,7 @@ The script remains CLI-runnable. The existing `set-status <id> <status>` command
 - Mutation: `createPost(input: CreatePostInput!)` returning `PostActionPayload` union
 - Auth: `Bearer ${BUFFER_ACCESS_TOKEN}` header
 - Channel targeting: `BUFFER_CHANNEL_ID` env var — comma-separated list for multi-channel (e.g. `LINKEDIN_ID,BLUESKY_ID`). One API call is made per channel at the same computed slot.
+- Channel-specific content: channels listed in `config.buffer.blueskyChannelIds` receive `post.bluesky_content` (≤300 chars); all other channels receive `post.content` (full LinkedIn post).
 - Scheduling: compute next available slot using `nextBufferSlot()`, pass as `dueAt` in ISO 8601
 - Mode: `customScheduled`, `schedulingType: automatic`
 - On success: update post record with `scheduled_at` and `buffer_update_ids` array (one entry per channel)
@@ -191,7 +192,8 @@ User opens vibe-kingdom session
       "windowStart": "16:00",
       "windowEnd": "17:00",
       "slotIntervalMinutes": 15
-    }
+    },
+    "blueskyChannelIds": ["YOUR_BLUESKY_CHANNEL_ID"]
   }
 }
 ```
@@ -222,7 +224,9 @@ The signal's URL is already passed in the user prompt (`URL: ${signal.url}`). Ad
 - *"A good post has 2–4 short paragraphs. First: one concrete observation or hook. Middle: the insight or tension. End: what it means for practitioners, or a question that invites response."*
 - *"Plain text only. No bullet lists. No headers. No hashtags. No emojis."*
 
-**E. LLM error handling.** `generatePostFromSignal` throws if the response looks like an error payload, is JSON, or is under 50 characters. `generate-posts` skips failed signals rather than saving error text to posts.json.
+**E. LLM error handling.** `generatePostFromSignal` throws if the response looks like an error payload, is JSON, or is under 50 characters. `generate-posts` skips failed signals rather than saving error text to posts.json. Bluesky generation failure is non-fatal — the LinkedIn post is still saved with `bluesky_content: null`.
+
+**F. Channel-specific content (Bluesky).** `generateBlueSkyPost(signal, profile)` is a separate Claude call with a short-form prompt targeting ≤300 chars total (including URL). Validates character count and throws if over limit. Posts store both `content` (LinkedIn) and `bluesky_content` (Bluesky). `push` selects the correct version per channel based on `config.buffer.blueskyChannelIds`.
 
 ---
 

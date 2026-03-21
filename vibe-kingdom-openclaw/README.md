@@ -140,10 +140,13 @@ Edit `~/.openclaw/vibe-kingdom/config.json` to customise domains, communities, a
       "windowStart": "16:00",
       "windowEnd": "17:00",
       "slotIntervalMinutes": 15
-    }
+    },
+    "blueskyChannelIds": ["YOUR_BLUESKY_CHANNEL_ID"]
   }
 }
 ```
+
+`blueskyChannelIds` tells the pipeline which Buffer channel IDs are Bluesky accounts. Those channels receive the short-form 300-character version of each post; all other channels receive the full LinkedIn version.
 
 ---
 
