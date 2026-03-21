@@ -123,7 +123,7 @@ Switch how the briefing sounds:
 - **10pm Sun-Thu** → Tomorrow preview
 
 **Cron jobs:**
-- `0 */15 * * * *` — Check changes every 15 minutes
+- `*/15 * * * *` — Check changes every 15 minutes
 - `0 22 * * 0-4` — Tomorrow preview at 10pm Sun-Thu
 
 ---

@@ -62,10 +62,7 @@ Copy/paste into LinkedIn or your scheduler.
 
 Required:
 - `TAVILY_API_KEY` — For web search and signal discovery
-
-Optional:
-- `GEMINI_API_KEY` — For post generation (fallback: Tavily synthesis)
-- `OPENAI_API_KEY` — Alternative LLM for generation
+- `ANTHROPIC_API_KEY` — For post generation and speaker profile synthesis
 
 ### Setup File (~/.openclaw/vibe-kingdom/config.json)
 
@@ -368,8 +365,8 @@ Keep it private; contains your draft thoughts and voice profile.
 - Update speaker profile tone settings in config.json
 
 **"API key invalid"**:
-- Cloud (Tavily): Check TAVILY_API_KEY is set correctly
-- Generation: Check GEMINI_API_KEY or OPENAI_API_KEY
+- Search: Check TAVILY_API_KEY is set correctly
+- Generation: Check ANTHROPIC_API_KEY is set correctly
 
 **"Too many false positives in signals"**:
 - Adjust `includeKeywords` and `excludeKeywords` in config.json
