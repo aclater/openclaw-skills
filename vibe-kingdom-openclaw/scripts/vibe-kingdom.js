@@ -291,7 +291,7 @@ async function bufferPush(postId) {
   return { post_id: postId, scheduled_at: scheduledAt, channels: results.length, buffer_update_ids: post.buffer_update_ids };
 }
 
-async function approvePost(postId) {
+async function approvePost(postId, pushToBuffer = false) {
   const posts = loadPosts();
   const post = posts.find(p => p.id === postId);
   if (!post) throw new Error(`Post ${postId} not found`);
@@ -299,7 +299,10 @@ async function approvePost(postId) {
   post.status = 'approved';
   post.approved_at = new Date().toISOString();
   savePosts(posts);
-  return await bufferPush(postId);
+  console.log(`Post ${postId} marked as approved (review before pushing to Buffer)`);
+  if (pushToBuffer) {
+    return await bufferPush(postId);
+  }
 }
 
 async function rejectPost(postId) {
@@ -317,9 +320,10 @@ async function approveAll(limit = 3) {
   const toApprove = drafts.slice(0, limit);
   if (drafts.length > limit) console.log(`Approving ${limit} of ${drafts.length} drafts (use --count N to change)`);
   for (const post of toApprove) {
-    const result = await approvePost(post.id);
-    if (result) console.log(formatPushResult(post.id, result));
+    await approvePost(post.id, false); // Do NOT auto-push to Buffer
+    console.log(`  ✓ Post ${post.id} approved`);
   }
+  console.log(`\n✅ All approved. Review posts, then push to Buffer:\n   buffer-push <id>\n`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1134,10 +1138,9 @@ async function cmdApprove(args) {
   const id = parseInt(args[0]);
   if (!id) { console.error('Usage: approve <id>'); process.exit(1); }
   try {
-    const result = await approvePost(id);
-    if (result?.dry_run) console.log(`[DRY RUN] Post ${id} approved — ${formatPushResult(id, result)}`);
-    else if (result) console.log(`Post ${id} approved — ${formatPushResult(id, result)}`);
-    else console.log(`Post ${id} approved`);
+    await approvePost(id, false); // Do NOT auto-push to Buffer
+    console.log(`\n✅ Post ${id} approved (ready for review)`);
+    console.log(`   When ready, push to Buffer: buffer-push ${id}\n`);
   } catch (e) { console.error(e.message); process.exit(1); }
 }
 
