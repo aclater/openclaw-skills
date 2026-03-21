@@ -138,6 +138,122 @@ function makeRequest(options, body = null) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Buffer slot scheduling
+
+/**
+ * Convert a local date+time to UTC milliseconds using Intl round-trip.
+ */
+function localToUtcMs(dateStr, hour, minute, timezone) {
+  const probe = new Date(`${dateStr}T${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}:00Z`);
+  const localStr = probe.toLocaleString('en-CA', { timeZone: timezone, hour12: false }).replace(',', '');
+  const [, timePart] = localStr.split(' ');
+  if (!timePart) return probe.getTime();
+  const formattedHour = parseInt(timePart.split(':')[0]);
+  const formattedMinute = parseInt(timePart.split(':')[1]);
+  const offsetMs = (hour - formattedHour) * 3600000 + (minute - formattedMinute) * 60000;
+  return probe.getTime() + offsetMs;
+}
+
+/**
+ * Returns the next available ISO 8601 slot in the Tue/Wed/Fri 4–5pm window
+ * that is not in occupiedIso. fromDate defaults to now.
+ */
+function nextBufferSlot(occupiedIso, fromDate, timezone) {
+  fromDate = fromDate || new Date();
+  timezone = timezone || 'America/New_York';
+
+  const occupied = new Set((occupiedIso || []).map(s => new Date(s).getTime()));
+  const slotDays = new Set([2, 3, 5]); // Tue=2, Wed=3, Fri=5
+  const windowStartHour = 16;
+  const slotMinutes = [0, 15, 30, 45];
+
+  for (let day = 0; day < 30; day++) {
+    const candidateDate = new Date(fromDate.getTime() + day * 86400000);
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      weekday: 'short', hour12: false
+    }).formatToParts(candidateDate);
+    const get = type => parts.find(p => p.type === type)?.value;
+    const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const wday = weekdayMap[get('weekday')];
+
+    if (!slotDays.has(wday)) continue;
+
+    const dateStr = `${get('year')}-${get('month')}-${get('day')}`;
+    for (const min of slotMinutes) {
+      const utcMs = localToUtcMs(dateStr, windowStartHour, min, timezone);
+      if (utcMs <= fromDate.getTime()) continue;
+      if (!occupied.has(utcMs)) return new Date(utcMs).toISOString();
+    }
+  }
+  throw new Error('No available Buffer slot found in the next 30 days');
+}
+
+/**
+ * Push a post to Buffer for scheduling.
+ * Set BUFFER_DRY_RUN=1 to skip the HTTP call and return a dry-run result.
+ */
+async function bufferPush(postId) {
+  const token = process.env.BUFFER_ACCESS_TOKEN;
+  const profileId = process.env.BUFFER_PROFILE_ID;
+  if (!token) throw new Error('BUFFER_ACCESS_TOKEN not set');
+  if (!profileId) throw new Error('BUFFER_PROFILE_ID not set');
+
+  const posts = loadPosts();
+  const post = posts.find(p => p.id === postId);
+  if (!post) throw new Error(`Post ${postId} not found`);
+
+  const config = loadConfig();
+  const tz = config.buffer?.timezone || 'America/New_York';
+  const occupiedIso = posts.filter(p => p.scheduled_at && p.id !== postId).map(p => p.scheduled_at);
+  const scheduledAt = nextBufferSlot(occupiedIso, new Date(), tz);
+
+  if (process.env.BUFFER_DRY_RUN === '1') {
+    post.scheduled_at = scheduledAt;
+    post.buffer_update_id = 'dry-run';
+    savePosts(posts);
+    return { dry_run: true, post_id: postId, text: post.content, scheduled_at: scheduledAt, profile_id: profileId };
+  }
+
+  // TODO: Replace this block with real Buffer API call once their new public API launches.
+  // Buffer's v1 API (api.bufferapp.com) is currently broken (returns 500).
+  // Buffer is rebuilding their Public API — see https://buffer.com/developers/api
+  // When available, implement: POST to the scheduling endpoint with access_token,
+  // profile_ids[], text, and scheduled_at params. Update post.buffer_update_id and
+  // post.scheduled_at on success, then call savePosts(posts).
+  throw new Error(
+    'Buffer API is currently unavailable (being rebuilt). Use BUFFER_DRY_RUN=1 or wait for Buffer\'s new API. See https://buffer.com/developers/api'
+  );
+}
+
+async function approvePost(postId) {
+  const posts = loadPosts();
+  const post = posts.find(p => p.id === postId);
+  if (!post) throw new Error(`Post ${postId} not found`);
+  if (post.status === 'approved') { console.log(`Post ${postId} already approved`); return; }
+  post.status = 'approved';
+  post.approved_at = new Date().toISOString();
+  savePosts(posts);
+  return await bufferPush(postId);
+}
+
+async function rejectPost(postId) {
+  const posts = loadPosts();
+  const post = posts.find(p => p.id === postId);
+  if (!post) throw new Error(`Post ${postId} not found`);
+  post.status = 'rejected';
+  post.rejected_at = new Date().toISOString();
+  savePosts(posts);
+}
+
+async function approveAll() {
+  const drafts = loadPosts().filter(p => p.status === 'draft').sort((a, b) => a.id - b.id);
+  if (drafts.length === 0) { console.log('No draft posts to approve'); return; }
+  for (const post of drafts) await approvePost(post.id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Claude API
 
 function callClaude(userPrompt, systemPrompt = null, maxTokens = 1024) {
@@ -599,43 +715,53 @@ Return a JSON object with exactly these fields:
 // Post generation
 
 async function generatePostFromSignal(signal, profile, style = null) {
-  const styleHint = style === 'shorter' ? 'Keep it under 100 words, one tight observation.'
-    : style === 'longer' ? 'Go deeper, 200-280 words, walk through the reasoning.'
-    : style === 'more_casual' ? 'Conversational tone, like talking to a colleague over coffee.'
-    : `Vary length and structure naturally, max ${profile.maxWordCount || 280} words.`;
+  const styleHint = style === 'shorter'
+    ? 'Write a tight, direct post under 100 words. One sharp observation, nothing more.'
+    : style === 'longer'
+    ? 'Write a fuller post, 200-250 words. Walk through the reasoning step by step.'
+    : style === 'more_casual'
+    ? 'Write conversationally, like talking to a peer over coffee. Relaxed but still substantive.'
+    : 'Vary length naturally — some posts are 80 words and punchy, some are 180 words and walk through the reasoning. Do not pad to fill a word count.';
 
   const systemPrompt = `You are a LinkedIn ghostwriter for ${profile.name} at ${profile.employer}.
 
 Voice: ${profile.tone}
 Domains: ${(profile.domains || []).join(', ')}
-Openers: ${(profile.openers || []).join(' | ')}
 Vocabulary: ${profile.vocabulary}
-Structure: ${profile.structure}
 Avoid: ${(profile.avoids || []).join(', ')}
 
-Write posts that sound like genuine peer conversation from someone with 15+ years in the field. No emojis, no hashtags, no generic praise. Plain text only. The goal is peer dialogue and thought leadership, not amplification.`;
+Structure: A good post has 2-4 short paragraphs separated by a blank line.
+- First paragraph: one concrete observation or hook — something specific, not generic.
+- Middle: the real tension or insight — what's actually hard about this, or what most people miss.
+- End: what this means for practitioners, or one genuine question that invites response.
+- Final line: the source URL, alone on its own line, no label.
+
+Vary your openers. Sometimes start with a direct observation. Sometimes open mid-story or with a question. Never open with "Been thinking about". Never start two posts with the same phrase.
+
+${profile.values ? `Values: ${profile.values.join(', ')}` : ''}
+
+Plain text only. No bullet lists. No headers. No hashtags. No emojis. Write the way a senior engineer talks to a peer at a conference, not the way a marketer writes content.`;
 
   const userPrompt = `Write a LinkedIn post inspired by this signal:
 
 Source: ${signal.source}${signal.subreddit ? ' (' + signal.subreddit + ')' : ''}
 Title: ${signal.title}
-Content: ${signal.content}
+Content: ${(signal.content || '').substring(0, 800)}
 URL: ${signal.url}
 
 Critical instructions:
-- Do NOT summarize or amplify this article. Use it as a conversation starter only.
-- Add ${profile.name}'s original insight — what does this person actually think about this problem from field experience?
-- The post should contribute new perspective, not repeat the signal's content.
-- Open with one of their natural openers. Be specific to their domains (${(profile.domains || []).slice(0, 3).join(', ')}).
+- Do NOT summarize or amplify this. Use it only as a conversation starter.
+- Add ${profile.name}'s original perspective from field experience. What does someone who has actually deployed this stuff actually think?
+- The post must contribute something not already in the signal.
 - ${styleHint}
-- Strictly non-political and non-inflammatory. Pure technical peer conversation.`;
+- Strictly non-political and non-inflammatory.
+- End with the source URL on its own line: ${signal.url}`;
 
   try {
-    return await callClaude(userPrompt, systemPrompt, 512);
+    return await callClaude(userPrompt, systemPrompt, 1024);
   } catch (e) {
     process.stderr.write(`Post generation failed: ${e.message}\n`);
-    const opener = (profile.openers || ['Been thinking about...'])[0];
-    return `${opener} ${signal.title}. The underlying challenge is real and one we encounter constantly in this space. The patterns for addressing it are well-established — the hard part is execution.`;
+    return `[Generation failed: ${e.message}]\n\nSignal: ${signal.title}\n${signal.url}`;
   }
 }
 
@@ -910,6 +1036,39 @@ function cmdSetStatus(args) {
   console.log(`Post ${id} marked as ${newStatus}`);
 }
 
+async function cmdBufferPush(args) {
+  const id = parseInt(args[0]);
+  if (!id) { console.error('Usage: buffer-push <id>'); process.exit(1); }
+  try {
+    const result = await bufferPush(id);
+    if (result.dry_run) console.log(`[DRY RUN] Post ${id} would be scheduled at ${result.scheduled_at}`);
+    else console.log(`Post ${id} queued in Buffer — scheduled: ${result.scheduled_at}`);
+  } catch (e) { console.error(`Buffer push failed: ${e.message}`); process.exit(1); }
+}
+
+async function cmdApprove(args) {
+  const id = parseInt(args[0]);
+  if (!id) { console.error('Usage: approve <id>'); process.exit(1); }
+  try {
+    const result = await approvePost(id);
+    if (result?.dry_run) console.log(`[DRY RUN] Post ${id} approved — would schedule at ${result.scheduled_at}`);
+    else if (result) console.log(`Post ${id} approved — queued for ${result.scheduled_at}`);
+    else console.log(`Post ${id} approved`);
+  } catch (e) { console.error(e.message); process.exit(1); }
+}
+
+async function cmdReject(args) {
+  const id = parseInt(args[0]);
+  if (!id) { console.error('Usage: reject <id>'); process.exit(1); }
+  try { await rejectPost(id); console.log(`Post ${id} rejected`); }
+  catch (e) { console.error(e.message); process.exit(1); }
+}
+
+async function cmdApproveAll() {
+  try { await approveAll(); }
+  catch (e) { console.error(e.message); process.exit(1); }
+}
+
 async function cmdRegeneratePost(args) {
   const id = parseInt(args[0]);
   const style = args.style || null;
@@ -1002,6 +1161,10 @@ Usage:
   ${scriptName} list-posts [--status S]        List posts (draft/approved/exported)
   ${scriptName} show-post <id>                 View full post
   ${scriptName} set-status <id> <status>       Mark post as draft/approved/exported
+  ${scriptName} approve <id>                   Approve post and queue to Buffer
+  ${scriptName} approve-all                    Approve all drafts and queue to Buffer
+  ${scriptName} reject <id>                    Reject a draft post
+  ${scriptName} buffer-push <id>               Push a specific post to Buffer
   ${scriptName} regenerate-post <id> [options] Regenerate a post with new angle
   ${scriptName} export-csv [--outfile F]       Export approved posts to CSV
   ${scriptName} rebuild-profile                Rebuild Speaker Profile from scratch
@@ -1047,6 +1210,10 @@ Data: ${DATA_DIR}
     case 'list-posts':        return cmdListPosts(cmdArgs);
     case 'show-post':         return cmdShowPost(args.slice(1));
     case 'set-status':        return cmdSetStatus(args.slice(1));
+    case 'buffer-push':       return cmdBufferPush(args.slice(1));
+    case 'approve':           return cmdApprove(args.slice(1));
+    case 'approve-all':       return cmdApproveAll();
+    case 'reject':            return cmdReject(args.slice(1));
     case 'regenerate-post':   return cmdRegeneratePost(args.slice(1).concat([cmdArgs]));
     case 'export-csv':        return cmdExportCSV(cmdArgs);
     case 'rebuild-profile':   return cmdRebuildProfile();
@@ -1057,4 +1224,9 @@ Data: ${DATA_DIR}
   }
 }
 
-main().catch(e => { console.error('Error:', e.message); process.exit(1); });
+if (require.main === module) {
+  main().catch(e => { console.error('Error:', e.message); process.exit(1); });
+} else {
+  // Test exports (only used by test scripts, not when run as CLI)
+  module.exports = { nextBufferSlot, localToUtcMs, bufferPush, approvePost, rejectPost, approveAll, loadPosts, generatePostFromSignal };
+}

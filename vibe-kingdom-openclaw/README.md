@@ -1,239 +1,154 @@
-# Vibe Kingdom - OpenClaw Edition
+# Vibe Kingdom — OpenClaw Edition
 
-**Modern personal brand amplification using signal sources and authentic voice.**
+Personal brand amplification for LinkedIn. Discovers quality technical discussions from Reddit, Hacker News, Dev.to, GitHub, Mastodon, and Lobste.rs, generates authentic posts in your voice, and schedules approved posts to Buffer.
 
-Transform quality technical conversations from communities (Reddit, HN, Dev.to, GitHub) into thoughtful LinkedIn posts in your authentic voice — without sounding like a bot or content marketing machine.
+## How It Works
 
-## What It Does
+1. **Cron** — OpenClaw wakes the vibe-kingdom agent Monday and Thursday at 8am
+2. **Fetch** — agent runs `fetch-signals` to pull fresh discussions from communities
+3. **Generate** — agent runs `generate-posts` to draft LinkedIn posts from signals
+4. **Review** — you open the vibe-kingdom session in OpenClaw and review drafts
+5. **Approve** — say "approve 3" or "approve all" in the session
+6. **Publish** — approved posts go straight to Buffer, scheduled Tue/Wed/Fri 4–5pm
 
-1. **Discovers signals** — Monitors communities for substantive technical discussions in your domain
-2. **Filters intelligently** — Finds non-political, business-focused, high-engagement content
-3. **Learns your voice** — Auto-builds a Speaker Profile from your public signals
-4. **Generates posts** — Creates authentic commentary that bridges communities to LinkedIn
-5. **You approve** — Simple workflow: discover → generate → approve → export
+---
 
-## Quick Start
+## Required API Keys
 
-### Initialize
-```bash
-node scripts/vibe-kingdom.js setup
+Set these in OpenClaw's environment/secrets UI — **not** in any config file.
+
+| Key | Where to get it |
+|-----|----------------|
+| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
+| `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) → API |
+| `BUFFER_ACCESS_TOKEN` | Buffer → Settings → Apps & API → Access Token |
+| `BUFFER_PROFILE_ID` | Run `curl "https://api.bufferapp.com/1/profiles.json?access_token=YOUR_TOKEN"` and find the `id` for your LinkedIn profile |
+
+> **Note:** Buffer's public API is currently being rebuilt. Set `BUFFER_DRY_RUN=1` to run in dry-run mode (slots are computed and stored locally, no HTTP call is made) until the new API launches. See [buffer.com/developers/api](https://buffer.com/developers/api).
+
+---
+
+## One-Time Setup in OpenClaw
+
+### 1. Install the skill
+
+In the OpenClaw Skills UI, add this repository. The skill script is at:
+```
+scripts/vibe-kingdom.js
 ```
 
-Creates config at `~/.openclaw/vibe-kingdom/`
+### 2. Create the agent
 
-### Discover discussions
-```bash
-node scripts/vibe-kingdom.js fetch-signals
+In OpenClaw → AI Agents, create a new agent:
+
+**Name:** `vibe-kingdom`
+
+**Tool command:**
+```
+node ~/.openclaw/skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js
 ```
 
-Searches Reddit, HN, Dev.to, GitHub for your domains
+**System prompt:**
+```
+You are the Vibe Kingdom content pipeline. Your job is to fetch technical
+signals, generate LinkedIn draft posts, and help review and publish them to
+Buffer.
 
-### Generate posts
-```bash
-node scripts/vibe-kingdom.js generate-posts --count 5
+When presenting draft posts: list them numerically with ID, source, and first
+40 words. Keep it scannable.
+
+Accept approval commands:
+- "approve <id>" — approve a single post and queue to Buffer
+- "approve all" — approve all remaining drafts (calls approve-all command)
+- "reject <id>" — reject a post
+- "show <id>" — show full post content
+
+After each approval, confirm the Buffer scheduled time. After reviewing all
+posts, summarise what was queued and what was rejected.
+
+Stay focused on the content pipeline. Do not engage in general conversation.
 ```
 
-Uses your Speaker Profile to create drafts
+**Required env vars** (set in agent tool env or OpenClaw global env):
+- `ANTHROPIC_API_KEY`
+- `TAVILY_API_KEY`
+- `BUFFER_ACCESS_TOKEN`
+- `BUFFER_PROFILE_ID`
 
-### Review & approve
+### 3. Create the cron job
+
+In OpenClaw → Cron, create a new job:
+
+| Field | Value |
+|-------|-------|
+| Name | `vibe-kingdom-fetch` |
+| Schedule | `0 8 * * 1,4` (Monday and Thursday at 8am) |
+| Agent | `vibe-kingdom` |
+| Session | Isolated |
+| Prompt | `Fetch new signals and generate 5 draft posts. Present them for review.` |
+
+If OpenClaw supports result delivery to your main chat timeline, enable it so you get a notification when new posts are ready.
+
+---
+
+## Commands
+
 ```bash
-node scripts/vibe-kingdom.js list-posts --status draft
-node scripts/vibe-kingdom.js show-post 1
-node scripts/vibe-kingdom.js set-status 1 approved
+node scripts/vibe-kingdom.js fetch-signals              # Discover signals from communities
+node scripts/vibe-kingdom.js generate-posts [--count N] # Generate N draft posts
+node scripts/vibe-kingdom.js list-posts [--status S]    # List posts (draft/approved/rejected)
+node scripts/vibe-kingdom.js show-post <id>             # View full post content
+node scripts/vibe-kingdom.js approve <id>               # Approve + queue to Buffer
+node scripts/vibe-kingdom.js approve-all                # Approve all drafts
+node scripts/vibe-kingdom.js reject <id>                # Reject a draft
+node scripts/vibe-kingdom.js buffer-push <id>           # Push a specific post to Buffer
+node scripts/vibe-kingdom.js set-status <id> <status>   # Update status only (no Buffer push)
+node scripts/vibe-kingdom.js regenerate-post <id>       # Regenerate with new angle
+node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profile
 ```
 
-### Export
+**Dry-run mode** (computes slots, no actual Buffer API call):
 ```bash
-node scripts/vibe-kingdom.js export-csv --outfile posts.csv
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js approve 1
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js approve-all
 ```
 
-Copy to LinkedIn or your scheduler.
-
-## Why This Is Different
-
-### Not RSS Feeds
-RSS is 2005. Vibe Kingdom uses **modern signal sources**: Reddit, Hacker News, GitHub, real-time web search.
-
-### Not Formulaic
-Posts generated from your **Speaker Profile** — learned from your actual public content — not templates.
-
-### Not Marketing
-Goal is **authentic peer dialogue**, not content volume. Posts sound like genuine insights from someone who's been doing this 15 years.
-
-### Not Scripted
-Every post varies in **tone, length, opener, and angle**. No repetitive patterns.
-
-## Signal Sources
-
-- **Reddit** — Subreddits: r/devops, r/kubernetes, r/cybersecurity, r/netsec, r/sysadmin
-- **Hacker News** — Trending posts and discussions
-- **Dev.to** — Technical articles and comments
-- **GitHub** — Repos, releases, discussions
-- **Tavily** — Real-time web search for your domains
+---
 
 ## Configuration
 
-Edit `~/.openclaw/vibe-kingdom/config.json`:
+Edit `~/.openclaw/vibe-kingdom/config.json` to customise domains, communities, and Buffer schedule:
 
 ```json
 {
-  "domains": ["cybersecurity", "kubernetes", "devops", "government IT"],
+  "domains": ["cybersecurity", "kubernetes", "devops", "federal government IT", "open source"],
   "communities": {
-    "reddit": ["r/devops", "r/kubernetes", "r/cybersecurity"],
+    "reddit": ["r/devops", "r/kubernetes", "r/cybersecurity", "r/netsec", "r/sysadmin"],
     "hn": true,
     "devto": true,
     "github": true
   },
-  "filters": {
-    "minUpvotes": 10,
-    "excludeKeywords": ["politics", "partisan", "inflammatory"]
+  "buffer": {
+    "timezone": "America/New_York",
+    "schedule": {
+      "days": ["tuesday", "wednesday", "friday"],
+      "windowStart": "16:00",
+      "windowEnd": "17:00",
+      "slotIntervalMinutes": 15
+    }
   }
 }
 ```
 
-## Voice & Tone
-
-Vibe Kingdom learns your voice from:
-- Your published articles and talks
-- LinkedIn activity
-- Video interviews
-- Public speaking patterns
-
-Then generates posts that authentically reflect your:
-- Expertise level
-- Communication style
-- Values and constraints
-- Domain focus
-
-**Example openers (vary naturally):**
-- "I recently read..."
-- "Been thinking about..."
-- "Saw this issue come up..."
-- "The good news is..."
-- "We've seen teams struggle with..."
-
-## Commands
-
-```
-setup                           Initialize configuration
-fetch-signals                   Discover signals from communities
-generate-posts --count N        Generate N draft posts from signals
-list-posts [--status S]         View posts by status
-show-post <id>                  View full post content
-set-status <id> <status>        Move post: draft → approved → exported
-export-csv [--outfile F]        Export approved posts for LinkedIn
-rebuild-profile                 Refresh Speaker Profile
-show-config                     View current configuration
-```
-
-## How It Works
-
-### 1. Signal Discovery
-Scans communities for substantive technical discussions matching your domains. Filters for engagement, quality, and relevance.
-
-### 2. Speaker Profile
-Auto-learns from your public presence:
-- Tavily searches for your content
-- Analysis of writing and speaking
-- Tone, style, vocabulary patterns
-- Values and constraints
-
-### 3. Post Generation
-For each signal:
-- Analyze the discussion
-- Extract the insight
-- Generate using your Speaker Profile
-- Pick the most authentic variation
-- Present as draft
-
-### 4. Approval Workflow
-Review drafts. Approve the ones that truly sound like you. Reject the generic ones.
-
-### 5. Export
-CSV file ready for LinkedIn, Buffer, Hootsuite, or copy/paste.
-
-## Philosophy
-
-**"Vibe coding for thought leadership"** — Instead of hand-writing every post or using templates, you co-create with AI:
-
-- AI discovers good conversations in your communities
-- AI learns how you actually think and communicate
-- You curate and approve what authentically reflects you
-- Result: Consistent, authentic, effortless thought leadership
-
-The goal is **quality over volume**. Not 10 posts a week. 2-3 authentic posts that drive real peer dialogue.
-
-## Requirements
-
-- Node.js 16+
-- `TAVILY_API_KEY` environment variable (for signal discovery)
-- Optional: `GEMINI_API_KEY` or `OPENAI_API_KEY` (for enhanced LLM generation)
+---
 
 ## Data Storage
 
-All data stored locally at: `~/.openclaw/vibe-kingdom/`
+All data at `~/.openclaw/vibe-kingdom/`:
 
-- `config.json` — Your configuration
-- `speaker_profile.json` — Auto-built voice profile
-- `signals.json` — Discovered discussions
-- `posts.json` — Generated posts and statuses
-- `exports/` — Exported CSVs
-
-## Use Cases
-
-### Effortless Thought Leadership
-Generate quality posts without hand-writing them. Stay visible without the work.
-
-### Authentic Voice
-Posts that actually sound like you, not like marketing content.
-
-### Community Engagement
-Bridge Reddit, HN, Dev.to discussions to LinkedIn without looking like content repackaging.
-
-### Consistent Presence
-Generate a batch of posts monthly, approve over time, maintain consistent presence.
-
-## Best Practices
-
-1. **Customize your config** — Add domains and communities relevant to your actual expertise
-2. **Review carefully** — Only approve posts that genuinely sound like you
-3. **Vary your content** — Don't approve every post; be selective and intentional
-4. **Update profile periodically** — Rebuild every 2-3 months to stay current
-5. **Engage with originals** — Comment on source discussions too; don't just extract
-6. **Keep it real** — If you disagree with a signal, don't approve it
-
-## Troubleshooting
-
-**"No signals found"**
-- Check domains in config.json
-- Increase `minUpvotes` threshold
-- Ensure API key is valid
-
-**"Posts don't sound like me"**
-- Run `rebuild-profile` to refresh voice
-- Adjust tone settings in config
-- Try regenerating with different style
-
-**"API key invalid"**
-- Check `TAVILY_API_KEY` is set
-- Verify key is correct
-
-## License
-
-MIT — Use freely. Respect community guidelines and source attributions.
-
-## Built With
-
-- OpenClaw — Personal automation framework
-- Tavily API — Real-time web search
-- Node.js — Modern, async runtime
-
-## Philosophy & Credits
-
-Inspired by vibe-coding philosophy: co-designing with AI instead of hand-coding everything up front.
-
-Original vibe-kingdom project: https://github.com/aclater/vibe-kingdom
-
----
-
-**Made for OpenClaw.** Your authentic voice, amplified.
+| File | Contents |
+|------|----------|
+| `config.json` | Your configuration |
+| `speaker_profile.json` | Auto-built voice profile |
+| `signals.json` | Discovered discussions |
+| `posts.json` | Posts and their statuses, including `scheduled_at` and `buffer_update_id` |
