@@ -308,7 +308,11 @@ async function rejectPost(postId) {
 async function approveAll() {
   const drafts = loadPosts().filter(p => p.status === 'draft').sort((a, b) => a.id - b.id);
   if (drafts.length === 0) { console.log('No draft posts to approve'); return; }
-  for (const post of drafts) await approvePost(post.id);
+  for (const post of drafts) {
+    const result = await approvePost(post.id);
+    if (result?.dry_run) console.log(`[DRY RUN] Post ${post.id} approved — would schedule at ${result.scheduled_at}`);
+    else if (result) console.log(`Post ${post.id} approved — queued for ${result.scheduled_at}`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1046,7 +1050,10 @@ function cmdListPosts(args) {
   }
 
   posts.forEach(p => {
-    console.log(`\n[${p.id}] ${p.status.toUpperCase()} — ${p.signal_source}`);
+    const scheduledLine = p.scheduled_at
+      ? ` — scheduled ${new Date(p.scheduled_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}`
+      : '';
+    console.log(`\n[${p.id}] ${p.status.toUpperCase()} — ${p.signal_source}${scheduledLine}`);
     console.log(`  ${p.content.substring(0, 100)}...`);
   });
   console.log();
@@ -1064,7 +1071,9 @@ function cmdShowPost(args) {
   console.log(`\n[${post.id}] ${post.status.toUpperCase()}`);
   console.log(`Source: ${post.signal_source} — ${post.signal_title}`);
   console.log(`URL: ${post.signal_url}`);
-  console.log(`Created: ${post.created_at}\n`);
+  console.log(`Created: ${post.created_at}`);
+  if (post.scheduled_at) console.log(`Scheduled: ${post.scheduled_at} (Buffer ID: ${post.buffer_update_id})`);
+  console.log();
   console.log(post.content);
   console.log();
 }
