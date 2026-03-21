@@ -311,10 +311,12 @@ async function rejectPost(postId) {
   savePosts(posts);
 }
 
-async function approveAll() {
+async function approveAll(limit = 3) {
   const drafts = loadPosts().filter(p => p.status === 'draft').sort((a, b) => a.id - b.id);
   if (drafts.length === 0) { console.log('No draft posts to approve'); return; }
-  for (const post of drafts) {
+  const toApprove = drafts.slice(0, limit);
+  if (drafts.length > limit) console.log(`Approving ${limit} of ${drafts.length} drafts (use --count N to change)`);
+  for (const post of toApprove) {
     const result = await approvePost(post.id);
     if (result) console.log(formatPushResult(post.id, result));
   }
@@ -1146,8 +1148,10 @@ async function cmdReject(args) {
   catch (e) { console.error(e.message); process.exit(1); }
 }
 
-async function cmdApproveAll() {
-  try { await approveAll(); }
+async function cmdApproveAll(cmdArgs) {
+  const countIdx = cmdArgs.indexOf('--count');
+  const limit = countIdx !== -1 ? parseInt(cmdArgs[countIdx + 1]) || 3 : 3;
+  try { await approveAll(limit); }
   catch (e) { console.error(e.message); process.exit(1); }
 }
 
@@ -1244,7 +1248,7 @@ Usage:
   ${scriptName} show-post <id>                 View full post
   ${scriptName} set-status <id> <status>       Mark post as draft/approved/exported
   ${scriptName} approve <id>                   Approve post and queue to Buffer
-  ${scriptName} approve-all                    Approve all drafts and queue to Buffer
+  ${scriptName} approve-all [--count N]         Approve up to N drafts and queue to Buffer (default 3)
   ${scriptName} reject <id>                    Reject a draft post
   ${scriptName} buffer-push <id>               Push a specific post to Buffer
   ${scriptName} regenerate-post <id> [options] Regenerate a post with new angle
@@ -1294,7 +1298,7 @@ Data: ${DATA_DIR}
     case 'set-status':        return cmdSetStatus(args.slice(1));
     case 'buffer-push':       return cmdBufferPush(args.slice(1));
     case 'approve':           return cmdApprove(args.slice(1));
-    case 'approve-all':       return cmdApproveAll();
+    case 'approve-all':       return cmdApproveAll(cmdArgs);
     case 'reject':            return cmdReject(args.slice(1));
     case 'regenerate-post':   return cmdRegeneratePost(args.slice(1).concat([cmdArgs]));
     case 'export-csv':        return cmdExportCSV(cmdArgs);
