@@ -8,8 +8,8 @@ Personal brand amplification for LinkedIn. Discovers quality technical discussio
 2. **Fetch** — agent runs `fetch-signals` to pull fresh discussions from communities
 3. **Generate** — agent runs `generate-posts` to draft LinkedIn posts from signals
 4. **Review** — you open the vibe-kingdom session in OpenClaw and review drafts
-5. **Approve** — say "approve 3" or "approve all" in the session
-6. **Publish** — approved posts go straight to Buffer, scheduled Tue/Wed/Fri 4–5pm
+5. **Approve** — say "approve 3" or "approve all" to mark posts as approved
+6. **Publish** — say "push 3" or "push all approved" to queue posts to Buffer, scheduled Tue/Wed/Fri 4–5pm
 
 ---
 
@@ -55,14 +55,21 @@ Buffer.
 When presenting draft posts: list them numerically with ID, source, and first
 40 words. Keep it scannable.
 
-Accept approval commands:
-- "approve <id>" — approve a single post and queue to Buffer
-- "approve all" — approve all remaining drafts (calls approve-all command)
+Two-stage workflow — approval and publishing are separate steps:
+
+Stage 1 — Review and approve:
+- "approve <id>" — mark a single post as approved (does NOT push to Buffer)
+- "approve all" — mark all drafts as approved (calls approve-all command)
 - "reject <id>" — reject a post
 - "show <id>" — show full post content
 
-After each approval, confirm the Buffer scheduled time. After reviewing all
-posts, summarise what was queued and what was rejected.
+Stage 2 — Push to Buffer:
+- "push <id>" — push an approved post to Buffer (calls buffer-push command)
+- "push all approved" — push all approved posts to Buffer one by one
+
+After each Buffer push, confirm the scheduled time. After reviewing all
+posts, summarise what was approved, what was rejected, and what was queued
+to Buffer.
 
 Stay focused on the content pipeline. Do not engage in general conversation.
 ```
@@ -96,8 +103,8 @@ node scripts/vibe-kingdom.js fetch-signals              # Discover signals from 
 node scripts/vibe-kingdom.js generate-posts [--count N] # Generate N draft posts
 node scripts/vibe-kingdom.js list-posts [--status S]    # List posts (draft/approved/rejected)
 node scripts/vibe-kingdom.js show-post <id>             # View full post content
-node scripts/vibe-kingdom.js approve <id>               # Approve + queue to Buffer
-node scripts/vibe-kingdom.js approve-all                # Approve all drafts
+node scripts/vibe-kingdom.js approve <id>               # Mark post as approved (no Buffer push)
+node scripts/vibe-kingdom.js approve-all [--count N]    # Mark up to N drafts as approved (default 3)
 node scripts/vibe-kingdom.js reject <id>                # Reject a draft
 node scripts/vibe-kingdom.js buffer-push <id>           # Push a specific post to Buffer
 node scripts/vibe-kingdom.js set-status <id> <status>   # Update status only (no Buffer push)
@@ -107,8 +114,8 @@ node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profil
 
 **Dry-run mode** (computes slots, no actual Buffer API call):
 ```bash
-BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js approve 1
-BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js approve-all
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js buffer-push 1
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js buffer-push 2
 ```
 
 ---

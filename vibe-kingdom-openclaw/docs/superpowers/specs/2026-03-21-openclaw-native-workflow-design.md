@@ -39,10 +39,10 @@ The script remains CLI-runnable. The existing `set-status <id> <status>` command
 | `list-posts [--status S]` | Existing — lists posts with ID, status, source, preview |
 | `show-post <id>` | Existing — shows full post content |
 | `set-status <id> <status>` | Existing — updates status only, no Buffer push |
-| `approve <id>` | **New** — marks post approved, calls `bufferPush(id)` internally |
-| `approve-all` | **New** — approves all draft posts sequentially (ascending by post ID), each gets its own Buffer slot |
+| `approve <id>` | **New** — marks post approved only, does NOT push to Buffer |
+| `approve-all [--count N]` | **New** — marks up to N draft posts approved (default 3), ascending by post ID, does NOT push to Buffer |
 | `reject <id>` | **New** — marks post rejected in posts.json, no Buffer push |
-| `buffer-push <id>` | **New** — pushes a single post to Buffer at next available slot (also called by `approve`) |
+| `buffer-push <id>` | **New** — pushes a single approved post to Buffer at next available slot |
 
 **Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed or introduced — `os.homedir()` returns the correct path whether the script is run by the openclaw container user or a developer on their local machine.
 
@@ -64,7 +64,7 @@ Ensures no two posts share the same scheduled time:
 5. Return the first slot not in the occupied set
 6. Timezone: read from `config.buffer.timezone` (default `America/New_York`)
 
-Approving three posts in a row will schedule them at e.g. Tue 4:00pm, Tue 4:15pm, Tue 4:30pm — spilling across days if the window fills up.
+Pushing three posts in a row will schedule them at e.g. Tue 4:00pm, Tue 4:15pm, Tue 4:30pm — spilling across days if the window fills up.
 
 ---
 
@@ -135,16 +135,19 @@ User opens vibe-kingdom session
   → reviews posts, says "approve 3"
   → agent calls: vibe-kingdom.js approve 3
     → posts.json updated (status: approved)
+    → agent confirms: "Post 3 approved — say 'push 3' to queue to Buffer"
+
+  → user says "approve all"
+  → agent calls: vibe-kingdom.js approve-all [--count N]
+    → up to N drafts marked approved sequentially (ascending by post ID, default 3)
+    → agent lists approved post IDs and prompts user to push when ready
+
+  → user says "push 3" (or "push all approved")
+  → agent calls: vibe-kingdom.js buffer-push 3
     → nextBufferSlot() computes next available Tue/Wed/Fri 4–5pm slot
     → Buffer API called, scheduled_at = computed slot
     → post record updated with buffer_update_id + scheduled_at
     → agent confirms: "Post 3 queued for Wednesday 4:15pm"
-
-  → user says "approve all"
-  → agent calls: vibe-kingdom.js approve-all
-    → each remaining draft approved sequentially (ascending by post ID)
-    → each gets its own Buffer slot (no collisions)
-    → agent confirms all scheduled times
 ```
 
 ---
@@ -172,8 +175,8 @@ New keys added to `~/.openclaw/vibe-kingdom/config.json`:
 ## What Changes in vibe-kingdom.js
 
 ### Approval and Buffer commands
-1. Add `approve <id>` command: update status to `approved`, call `bufferPush(id)`
-2. Add `approve-all` command: load all drafts sorted ascending by post ID, call `approve` on each sequentially
+1. Add `approve <id>` command: update status to `approved` only — does NOT call `bufferPush`
+2. Add `approve-all [--count N]` command: load up to N drafts sorted ascending by post ID, mark each approved — does NOT push to Buffer
 3. Add `reject <id>` command: update status to `rejected`
 4. Add `bufferPush(id)` function: call `nextBufferSlot()`, POST to Buffer API, update post record
 5. Add `nextBufferSlot(config)` function: iterate Tue/Wed/Fri 4–5pm windows, avoid occupied timestamps
