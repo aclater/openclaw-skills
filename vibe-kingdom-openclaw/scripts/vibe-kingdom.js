@@ -191,7 +191,7 @@ function nextBufferSlot(occupiedIso, fromDate, timezone) {
 }
 
 /**
- * Push a post to Buffer for scheduling.
+ * Push a post to Buffer for scheduling via the GraphQL API.
  * Set BUFFER_DRY_RUN=1 to skip the HTTP call and return a dry-run result.
  */
 async function bufferPush(postId) {
@@ -217,16 +217,34 @@ async function bufferPush(postId) {
   }
 
   const payload = JSON.stringify({
-    text: post.content,
-    channels: [channelId],
-    scheduled_at: scheduledAt,
-    type: 'post'
+    query: `mutation CreatePost($input: CreatePostInput!) {
+      createPost(input: $input) {
+        ... on PostActionSuccess {
+          post {
+            id
+            text
+          }
+        }
+        ... on MutationError {
+          message
+        }
+      }
+    }`,
+    variables: {
+      input: {
+        channelId: channelId,
+        text: post.content,
+        schedulingType: 'automatic',
+        mode: 'customScheduled',
+        dueAt: scheduledAt
+      }
+    }
   });
 
   return new Promise((resolve, reject) => {
     const req = https.request({
-      hostname: 'api.bufferapp.com',
-      path: '/2024/schedules',
+      hostname: 'api.buffer.com',
+      path: '/',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -242,13 +260,19 @@ async function bufferPush(postId) {
         }
         try {
           const result = JSON.parse(data);
-          if (res.statusCode === 200 || res.statusCode === 201) {
-            post.buffer_update_id = result.id;
+          if (result.errors && result.errors.length > 0) {
+            return reject(new Error(`Buffer GraphQL error: ${result.errors.map(e => e.message).join(', ')}`));
+          }
+          const payload = result.data?.createPost;
+          if (payload?.post) {
+            post.buffer_update_id = payload.post.id;
             post.scheduled_at = scheduledAt;
             savePosts(posts);
-            resolve({ post_id: postId, buffer_update_id: result.id, scheduled_at: scheduledAt });
+            resolve({ post_id: postId, buffer_update_id: payload.post.id, scheduled_at: scheduledAt });
+          } else if (payload?.message) {
+            reject(new Error(`Buffer error: ${payload.message}`));
           } else {
-            reject(new Error(`Buffer error: ${result.error?.message || JSON.stringify(result)}`));
+            reject(new Error(`Buffer unexpected response: ${JSON.stringify(result).slice(0, 300)}`));
           }
         } catch (e) {
           reject(new Error(`Buffer response parse error: ${e.message} — raw: ${data.slice(0, 200)}`));

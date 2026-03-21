@@ -22,7 +22,7 @@ Set these in OpenClaw's environment/secrets UI — **not** in any config file.
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
 | `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) → API |
 | `BUFFER_ACCESS_TOKEN` | Buffer → Settings → Apps & API → Access Token (OAuth Bearer token) |
-| `BUFFER_CHANNEL_ID` | Buffer → Settings → Connected Accounts → your LinkedIn account ID (looks like `507xxxxxxxxxxxxxxxxxxxxxxx`) |
+| `BUFFER_CHANNEL_ID` | Buffer channel ID for your LinkedIn account — get it via OpenClaw's buffer-channels tool or from the URL at publish.buffer.com/channels/**ID**/settings |
 
 ---
 
