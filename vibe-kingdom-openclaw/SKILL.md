@@ -12,7 +12,7 @@ Automated LinkedIn content from the communities you follow. Fetches signals, gen
 Approval and publishing are separate steps:
 
 1. **Approve** — mark posts as approved after review (`approve <id>`, `approve-all`)
-2. **Push** — queue approved posts to Buffer when ready (`buffer-push <id>`)
+2. **Push** — queue approved posts to Buffer when ready (`push <id>`)
 
 ## Commands
 
@@ -24,7 +24,7 @@ node scripts/vibe-kingdom.js show-post <id>             # View full post content
 node scripts/vibe-kingdom.js approve <id>               # Mark post as approved (no Buffer push)
 node scripts/vibe-kingdom.js approve-all [--count N]    # Mark up to N drafts approved (default 3)
 node scripts/vibe-kingdom.js reject <id>                # Reject a draft
-node scripts/vibe-kingdom.js buffer-push <id>           # Push approved post to Buffer
+node scripts/vibe-kingdom.js push <id>           # Push approved post to Buffer
 node scripts/vibe-kingdom.js set-status <id> <status>   # Update status only (no Buffer push)
 node scripts/vibe-kingdom.js regenerate-post <id>       # Regenerate with new angle
 node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profile

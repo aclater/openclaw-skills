@@ -323,7 +323,7 @@ async function approveAll(limit = 3) {
     await approvePost(post.id, false); // Do NOT auto-push to Buffer
     console.log(`  ✓ Post ${post.id} approved`);
   }
-  console.log(`\n✅ All approved. Review posts, then push to Buffer:\n   buffer-push <id>\n`);
+  console.log(`\n✅ All approved. Review posts, then push to Buffer:\n   push <id>\n`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -830,12 +830,17 @@ Critical instructions:
 - Strictly non-political and non-inflammatory.
 - End with the source URL on its own line: ${signal.url}`;
 
-  try {
-    return await callClaude(userPrompt, systemPrompt, 1024);
-  } catch (e) {
-    process.stderr.write(`Post generation failed: ${e.message}\n`);
-    return `[Generation failed: ${e.message}]\n\nSignal: ${signal.title}\n${signal.url}`;
+  const raw = await callClaude(userPrompt, systemPrompt, 1024);
+
+  // Reject anything that looks like an error payload rather than a real post
+  if (raw.startsWith('{') || raw.startsWith('[') || raw.toLowerCase().includes('"type":"error"')) {
+    throw new Error(`LLM returned an error response instead of post content: ${raw.substring(0, 120)}`);
   }
+  if (raw.trim().length < 50) {
+    throw new Error(`LLM returned suspiciously short content (${raw.trim().length} chars): ${raw.trim()}`);
+  }
+
+  return raw;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1024,7 +1029,13 @@ async function cmdGeneratePosts(args) {
   const newPosts = [];
   for (const signal of available) {
     process.stdout.write(`  Generating from [${signal.source}] ${signal.title.substring(0, 50)}... `);
-    const content = await generatePostFromSignal(signal, profile);
+    let content;
+    try {
+      content = await generatePostFromSignal(signal, profile);
+    } catch (e) {
+      console.log(`SKIPPED (${e.message})`);
+      continue;
+    }
     const post = {
       id: nextId([...existingPosts, ...newPosts]),
       signal_id: signal.id,
@@ -1125,9 +1136,9 @@ function formatPushResult(id, result) {
   return `Post ${id} queued in Buffer${ch} — scheduled: ${result.scheduled_at}`;
 }
 
-async function cmdBufferPush(args) {
+async function cmdPush(args) {
   const id = parseInt(args[0]);
-  if (!id) { console.error('Usage: buffer-push <id>'); process.exit(1); }
+  if (!id) { console.error('Usage: push <id>'); process.exit(1); }
   try {
     const result = await bufferPush(id);
     console.log(formatPushResult(id, result));
@@ -1140,7 +1151,7 @@ async function cmdApprove(args) {
   try {
     await approvePost(id, false); // Do NOT auto-push to Buffer
     console.log(`\n✅ Post ${id} approved (ready for review)`);
-    console.log(`   When ready, push to Buffer: buffer-push ${id}\n`);
+    console.log(`   When ready, push to Buffer: push ${id}\n`);
   } catch (e) { console.error(e.message); process.exit(1); }
 }
 
@@ -1185,7 +1196,13 @@ async function cmdRegeneratePost(args) {
   }
 
   console.log(`Regenerating post ${id}${style ? ' (style: ' + style + ')' : ''}...`);
-  const newContent = await generatePostFromSignal(signal, profile, style);
+  let newContent;
+  try {
+    newContent = await generatePostFromSignal(signal, profile, style);
+  } catch (e) {
+    console.error(`Regeneration failed: ${e.message}`);
+    process.exit(1);
+  }
 
   post.content = newContent;
   post.status = 'draft';
@@ -1253,7 +1270,7 @@ Usage:
   ${scriptName} approve <id>                   Approve post and queue to Buffer
   ${scriptName} approve-all [--count N]         Approve up to N drafts and queue to Buffer (default 3)
   ${scriptName} reject <id>                    Reject a draft post
-  ${scriptName} buffer-push <id>               Push a specific post to Buffer
+  ${scriptName} push <id>                      Push a specific post to Buffer
   ${scriptName} regenerate-post <id> [options] Regenerate a post with new angle
   ${scriptName} export-csv [--outfile F]       Export approved posts to CSV
   ${scriptName} rebuild-profile                Rebuild Speaker Profile from scratch
@@ -1299,7 +1316,7 @@ Data: ${DATA_DIR}
     case 'list-posts':        return cmdListPosts(cmdArgs);
     case 'show-post':         return cmdShowPost(args.slice(1));
     case 'set-status':        return cmdSetStatus(args.slice(1));
-    case 'buffer-push':       return cmdBufferPush(args.slice(1));
+    case 'push':              return cmdPush(args.slice(1));
     case 'approve':           return cmdApprove(args.slice(1));
     case 'approve-all':       return cmdApproveAll(cmdArgs);
     case 'reject':            return cmdReject(args.slice(1));
@@ -1317,5 +1334,5 @@ if (require.main === module) {
   main().catch(e => { console.error('Error:', e.message); process.exit(1); });
 } else {
   // Test exports (only used by test scripts, not when run as CLI)
-  module.exports = { nextBufferSlot, localToUtcMs, bufferPush, approvePost, rejectPost, approveAll, loadPosts, generatePostFromSignal };
+  module.exports = { nextBufferSlot, localToUtcMs, bufferPush, approvePost, rejectPost, approveAll, loadPosts, generatePostFromSignal, cmdPush };
 }

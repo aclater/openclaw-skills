@@ -42,11 +42,11 @@ The script remains CLI-runnable. The existing `set-status <id> <status>` command
 | `approve <id>` | **New** — marks post approved only, does NOT push to Buffer |
 | `approve-all [--count N]` | **New** — marks up to N draft posts approved (default 3), ascending by post ID, does NOT push to Buffer |
 | `reject <id>` | **New** — marks post rejected in posts.json, no Buffer push |
-| `buffer-push <id>` | **New** — pushes a single approved post to Buffer at next available slot |
+| `push <id>` | **New** — pushes a single approved post to Buffer at next available slot |
 
 **Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed or introduced — `os.homedir()` returns the correct path whether the script is run by the openclaw container user or a developer on their local machine.
 
-**Buffer integration (`buffer-push`):**
+**Buffer integration (`push`):**
 - Verify current endpoint before implementation; historically `POST https://api.bufferapp.com/1/updates/create.json` — check Buffer's developer docs for the current publishing endpoint before coding.
 - Auth: `BUFFER_ACCESS_TOKEN` env var
 - Target profile: `BUFFER_PROFILE_ID` env var (LinkedIn profile ID in Buffer)
@@ -143,7 +143,7 @@ User opens vibe-kingdom session
     → agent lists approved post IDs and prompts user to push when ready
 
   → user says "push 3" (or "push all approved")
-  → agent calls: vibe-kingdom.js buffer-push 3
+  → agent calls: vibe-kingdom.js push 3
     → nextBufferSlot() computes next available Tue/Wed/Fri 4–5pm slot
     → Buffer API called, scheduled_at = computed slot
     → post record updated with buffer_update_id + scheduled_at

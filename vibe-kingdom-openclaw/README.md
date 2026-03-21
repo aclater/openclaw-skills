@@ -64,7 +64,7 @@ Stage 1 — Review and approve:
 - "show <id>" — show full post content
 
 Stage 2 — Push to Buffer:
-- "push <id>" — push an approved post to Buffer (calls buffer-push command)
+- "push <id>" — push an approved post to Buffer (calls push command)
 - "push all approved" — push all approved posts to Buffer one by one
 
 After each Buffer push, confirm the scheduled time. After reviewing all
@@ -106,7 +106,7 @@ node scripts/vibe-kingdom.js show-post <id>             # View full post content
 node scripts/vibe-kingdom.js approve <id>               # Mark post as approved (no Buffer push)
 node scripts/vibe-kingdom.js approve-all [--count N]    # Mark up to N drafts as approved (default 3)
 node scripts/vibe-kingdom.js reject <id>                # Reject a draft
-node scripts/vibe-kingdom.js buffer-push <id>           # Push a specific post to Buffer
+node scripts/vibe-kingdom.js push <id>           # Push a specific post to Buffer
 node scripts/vibe-kingdom.js set-status <id> <status>   # Update status only (no Buffer push)
 node scripts/vibe-kingdom.js regenerate-post <id>       # Regenerate with new angle
 node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profile
@@ -114,8 +114,8 @@ node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profil
 
 **Dry-run mode** (computes slots, no actual Buffer API call):
 ```bash
-BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js buffer-push 1
-BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js buffer-push 2
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js push 1
+BUFFER_DRY_RUN=1 node scripts/vibe-kingdom.js push 2
 ```
 
 ---
