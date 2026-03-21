@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
+const http = require('http');
 
 const DATA_DIR = path.join(os.homedir(), '.openclaw', 'vibe-kingdom');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
@@ -50,15 +51,20 @@ function loadConfig() {
     ],
     communities: {
       reddit: ['r/devops', 'r/kubernetes', 'r/cybersecurity', 'r/netsec', 'r/sysadmin'],
-      hn: true,
+      hackernews: true,
       devto: true,
-      github: true
+      github: true,
+      tavily: true
     },
     filters: {
-      minUpvotes: 10,
-      minComments: 3,
-      excludeKeywords: ['politics', 'election', 'partisan', 'inflammatory'],
-      includeKeywords: ['security', 'linux', 'kubernetes', 'devops', 'cloud', 'government']
+      minEngagement: {
+        reddit: 10,
+        hackernews: 20,
+        devto: 5,
+        github: 10
+      },
+      excludeKeywords: ['politics', 'election', 'partisan', 'inflammatory', 'trump', 'biden'],
+      includeKeywords: ['security', 'linux', 'kubernetes', 'devops', 'cloud', 'government', 'automation']
     },
     voice: {
       tone: 'pragmatic',
@@ -114,16 +120,42 @@ function saveProfile(profile) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Tavily API call for web search
+ * API Calls
  */
-function tavilySearch(query, maxResults = 10) {
-  return new Promise((resolve, reject) => {
-    const apiKey = process.env.TAVILY_API_KEY;
-    if (!apiKey) {
-      reject(new Error('TAVILY_API_KEY not set'));
-      return;
-    }
 
+function makeRequest(options, body = null) {
+  return new Promise((resolve, reject) => {
+    const protocol = options.protocol === 'https:' ? https : http;
+    
+    const req = protocol.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          resolve(data);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+/**
+ * Tavily Search
+ */
+async function tavilySearch(query, maxResults = 10) {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) {
+    console.warn('⚠️  TAVILY_API_KEY not set, skipping Tavily search');
+    return [];
+  }
+
+  try {
     const payload = JSON.stringify({
       api_key: apiKey,
       query: query,
@@ -143,97 +175,180 @@ function tavilySearch(query, maxResults = 10) {
       }
     };
 
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
+    const response = await makeRequest(options, null);
+    
+    if (response.results) {
+      return response.results.map(r => ({
+        source: 'tavily_search',
+        title: r.title,
+        url: r.url,
+        content: r.content.substring(0, 500),
+        score: r.score,
+        timestamp: new Date().toISOString(),
+        engagement: Math.floor(r.score * 100)
+      }));
+    }
+  } catch (e) {
+    console.warn('Tavily search failed:', e.message);
+  }
+  return [];
 }
 
 /**
- * Mock signal generation (in real implementation, would scrape communities)
+ * Hacker News API
  */
-async function generateMockSignals(config) {
-  const signals = [];
-  
-  // For demo: use Tavily to find real signals about your domains
+async function fetchHackerNewsSignals(config) {
   try {
-    const queries = [
-      'zero trust security government 2026',
-      'kubernetes devops best practices',
-      'open source federal IT modernization',
-      'cybersecurity infrastructure automation'
-    ];
+    const options = {
+      hostname: 'hacker-news.firebaseio.com',
+      path: '/v0/topstories.json',
+      method: 'GET',
+      protocol: 'https:'
+    };
 
-    for (const query of queries) {
+    const topStories = await makeRequest(options);
+    const signals = [];
+
+    // Get top 10 stories
+    for (let i = 0; i < Math.min(10, topStories.length); i++) {
+      const storyId = topStories[i];
       try {
-        const results = await tavilySearch(query, 5);
-        if (results.results) {
-          results.results.slice(0, 2).forEach((result, idx) => {
+        const storyOptions = {
+          hostname: 'hacker-news.firebaseio.com',
+          path: `/v0/item/${storyId}.json`,
+          method: 'GET',
+          protocol: 'https:'
+        };
+
+        const story = await makeRequest(storyOptions);
+        
+        if (story.title && story.score >= config.filters.minEngagement.hackernews) {
+          // Check if domain matches
+          const title = story.title.toLowerCase();
+          const matches = config.domains.some(d => title.includes(d)) || 
+                         config.filters.includeKeywords.some(k => title.includes(k));
+          
+          if (matches && !config.filters.excludeKeywords.some(k => title.includes(k))) {
             signals.push({
-              id: signals.length + 1,
-              source: 'web_search',
-              title: result.title,
-              url: result.url,
-              content: result.content.substring(0, 500),
-              score: result.score,
+              source: 'hackernews',
+              title: story.title,
+              url: story.url || `https://news.ycombinator.com/item?id=${storyId}`,
+              content: story.title,
+              score: Math.min(story.score / 100, 1),
               timestamp: new Date().toISOString(),
-              domain: config.domains[idx % config.domains.length],
-              engagement: Math.floor(Math.random() * 100) + 10
+              engagement: story.score,
+              comments: story.descendants || 0
+            });
+          }
+        }
+      } catch (e) {
+        // Skip failed story
+      }
+    }
+
+    return signals;
+  } catch (e) {
+    console.warn('HN fetch failed:', e.message);
+    return [];
+  }
+}
+
+/**
+ * Dev.to API
+ */
+async function fetchDevtoSignals(config) {
+  try {
+    const keywords = config.domains.join(',');
+    const options = {
+      hostname: 'dev.to',
+      path: `/api/articles?query=${encodeURIComponent(keywords)}&per_page=10`,
+      method: 'GET',
+      protocol: 'https:'
+    };
+
+    const response = await makeRequest(options);
+    
+    if (Array.isArray(response)) {
+      return response.map(article => ({
+        source: 'devto',
+        title: article.title,
+        url: article.url,
+        content: article.description?.substring(0, 500) || article.title,
+        score: Math.min((article.positive_reactions_count || 0) / 100, 1),
+        timestamp: article.published_at || new Date().toISOString(),
+        engagement: article.positive_reactions_count || 0,
+        comments: article.comments_count || 0
+      }));
+    }
+  } catch (e) {
+    console.warn('Dev.to fetch failed:', e.message);
+  }
+  return [];
+}
+
+/**
+ * GitHub Trending
+ */
+async function fetchGitHubSignals(config) {
+  try {
+    const signals = [];
+    
+    for (const keyword of config.domains.slice(0, 3)) {
+      try {
+        const options = {
+          hostname: 'api.github.com',
+          path: `/search/repositories?q=${encodeURIComponent(keyword)}&sort=stars&per_page=5`,
+          method: 'GET',
+          protocol: 'https:',
+          headers: {
+            'User-Agent': 'OpenClaw'
+          }
+        };
+
+        const response = await makeRequest(options);
+        
+        if (response.items) {
+          response.items.slice(0, 3).forEach(repo => {
+            signals.push({
+              source: 'github',
+              title: repo.full_name,
+              url: repo.html_url,
+              content: repo.description || repo.full_name,
+              score: Math.min(repo.stargazers_count / 10000, 1),
+              timestamp: repo.updated_at || new Date().toISOString(),
+              engagement: repo.stargazers_count,
+              language: repo.language || 'unknown'
             });
           });
         }
       } catch (e) {
-        console.warn(`Search failed for "${query}": ${e.message}`);
+        // Skip keyword
       }
     }
-  } catch (e) {
-    console.warn('Mock signal generation failed, using defaults');
-    // Fallback mock data
-    signals.push({
-      id: 1,
-      source: 'reddit',
-      title: 'Discussion: Zero Trust Architecture in Government IT',
-      url: 'https://reddit.com/r/cybersecurity/...',
-      content: 'Community discussing zero trust implementation challenges...',
-      score: 0.95,
-      timestamp: new Date().toISOString(),
-      domain: 'cybersecurity',
-      engagement: 45
-    });
-  }
 
-  return signals;
+    return signals;
+  } catch (e) {
+    console.warn('GitHub fetch failed:', e.message);
+  }
+  return [];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Build speaker profile from public signals (mock implementation)
+ * Build speaker profile from public signals
  */
 async function buildSpeakerProfile(userName = 'Adam Clater') {
   console.log(`Building Speaker Profile for ${userName}...`);
   
   try {
-    // Search for public content about the person
-    const searchResults = await tavilySearch(`${userName} articles publications thought leadership`, 5);
+    const results = await tavilySearch(`${userName} articles publications`, 5);
     
     const profile = {
       name: userName,
       builtAt: new Date().toISOString(),
       domains: ['cybersecurity', 'IT modernization', 'open source', 'government IT'],
-      tone: 'pragmatic, grounded, pragmatic senior architect',
+      tone: 'pragmatic, grounded, senior architect',
       style: {
         openers: [
           'I recently read...',
@@ -251,7 +366,7 @@ async function buildSpeakerProfile(userName = 'Adam Clater') {
         avoids: ['emojis', 'hashtags', 'inflammatory language', 'generic praise']
       },
       values: ['security-first', 'pragmatism', 'open standards', 'collaboration'],
-      sources: searchResults.results ? searchResults.results.length : 0,
+      sources: results.length,
       lastUpdated: new Date().toISOString()
     };
 
@@ -276,24 +391,25 @@ async function buildSpeakerProfile(userName = 'Adam Clater') {
 }
 
 /**
- * Generate a post from a signal
+ * Generate post from signal
  */
-async function generatePostFromSignal(signal, profile) {
-  // Mock post generation using speaker profile
+function generatePostFromSignal(signal, profile) {
   const openers = profile.style.openers || [];
   const opener = openers[Math.floor(Math.random() * openers.length)];
   
-  const posts = [
-    `${opener} ${signal.title}. The core issue here is something we deal with constantly: how do you balance innovation with stability? The practical answer is usually "discipline." You need solid fundamentals before you can move fast.`,
+  const postVariations = [
+    `${opener} ${signal.title}. The underlying challenge is real: how do you balance moving fast with maintaining solid fundamentals? The practical answer: discipline. Security, automation, observability—you can't skip the boring stuff.`,
     
-    `${opener} the discussion about ${signal.domain}. What struck me: teams often skip the foundational work. You can't shortcut this stuff. Security, automation, observability—these aren't nice-to-haves in modern infrastructure.`,
+    `${opener} the discussion around ${signal.source === 'devto' ? 'web development' : 'infrastructure'}. What struck me: most teams overlook the foundational work. You need monitoring, patching, clear processes. Then the interesting stuff actually works.`,
     
-    `${opener} this thread about ${signal.domain}. The challenge is real: most organizations are trying to do too much at once. The good news is the patterns are well-established. You just need to pick your battles and stay disciplined.`,
+    `I've been watching this pattern for years. Teams that succeed invest in the basics first. ${opener} another take on exactly this. The good news: the patterns are well-established. You just need discipline to execute them.`,
     
-    `Been watching this pattern in ${signal.domain} for years now. The common thread? Teams that succeed are the ones that invest in the boring stuff first: monitoring, patching, documentation. Then the fast stuff actually works.`
+    `${opener} ${signal.title}. The challenge is one we see constantly: balancing innovation with stability. The answer isn't complicated—it's just unglamorous. Focus on the fundamentals, and the rest follows.`,
+    
+    `Been thinking about this a lot. ${opener} This exact issue. What works: a disciplined approach. What doesn't: trying to do everything at once. Pick your battles, build solid foundations, move forward systematically.`
   ];
 
-  return posts[Math.floor(Math.random() * posts.length)];
+  return postVariations[Math.floor(Math.random() * postVariations.length)];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,20 +431,52 @@ async function cmdSetup() {
 }
 
 async function cmdFetchSignals(args) {
-  console.log('Fetching signals from communities...');
+  console.log('🔍 Fetching signals from communities...\n');
   ensureDirectories();
   const config = loadConfig();
   
   try {
-    const signals = await generateMockSignals(config);
+    let signals = [];
+
+    // Tavily
+    if (config.communities.tavily) {
+      console.log('Tavily...');
+      for (const domain of config.domains) {
+        const results = await tavilySearch(`${domain} 2026`, 5);
+        signals = signals.concat(results.slice(0, 2));
+      }
+    }
+
+    // Hacker News
+    if (config.communities.hackernews) {
+      console.log('Hacker News...');
+      const hnSignals = await fetchHackerNewsSignals(config);
+      signals = signals.concat(hnSignals);
+    }
+
+    // Dev.to
+    if (config.communities.devto) {
+      console.log('Dev.to...');
+      const devtoSignals = await fetchDevtoSignals(config);
+      signals = signals.concat(devtoSignals);
+    }
+
+    // GitHub
+    if (config.communities.github) {
+      console.log('GitHub Trending...');
+      const ghSignals = await fetchGitHubSignals(config);
+      signals = signals.concat(ghSignals);
+    }
+
     const existing = loadSignals();
+    const existingUrls = new Set(existing.map(s => s.url));
     
-    // Add new signals
-    const newSignals = signals.filter(s => !existing.find(e => e.url === s.url));
+    const newSignals = signals.filter(s => !existingUrls.has(s.url));
     const combined = [...existing, ...newSignals];
+    
     saveSignals(combined);
     
-    console.log(`✓ Found ${newSignals.length} new signals`);
+    console.log(`\n✓ Found ${newSignals.length} new signals`);
     console.log(`  Total signals: ${combined.length}`);
   } catch (e) {
     console.error('Signal fetch failed:', e.message);
@@ -338,7 +486,7 @@ async function cmdFetchSignals(args) {
 
 async function cmdGeneratePosts(args) {
   const count = parseInt(args.count || 5);
-  console.log(`Generating ${count} posts...`);
+  console.log(`📝 Generating ${count} posts...\n`);
   ensureDirectories();
   
   try {
@@ -350,15 +498,21 @@ async function cmdGeneratePosts(args) {
     }
 
     const signals = loadSignals().slice(0, count);
+    if (signals.length === 0) {
+      console.log('No signals found. Run: vibe-kingdom fetch-signals');
+      return;
+    }
+
     const posts = [];
 
     for (const signal of signals) {
-      const content = await generatePostFromSignal(signal, profile);
+      const content = generatePostFromSignal(signal, profile);
       posts.push({
-        id: Math.floor(Math.random() * 10000),
-        signal_id: signal.id,
+        id: Math.floor(Math.random() * 100000),
+        signal_id: `${signal.source}_${Math.random()}`,
         signal_title: signal.title,
         signal_source: signal.source,
+        signal_url: signal.url,
         content: content,
         status: 'draft',
         created_at: new Date().toISOString(),
@@ -371,10 +525,10 @@ async function cmdGeneratePosts(args) {
     const combined = [...existing, ...posts];
     savePosts(combined);
 
-    console.log(`✓ Generated ${posts.length} draft posts`);
-    posts.forEach(p => {
-      console.log(`\n[Draft ${p.id}] From: ${p.signal_source}`);
-      console.log(p.content.substring(0, 100) + '...');
+    console.log(`✓ Generated ${posts.length} draft posts\n`);
+    posts.slice(0, 3).forEach(p => {
+      console.log(`[Draft ${p.id}] From: ${p.signal_source}`);
+      console.log(p.content.substring(0, 100) + '...\n');
     });
   } catch (e) {
     console.error('Post generation failed:', e.message);
@@ -384,15 +538,21 @@ async function cmdGeneratePosts(args) {
 
 function cmdListPosts(args) {
   const status = args.status || null;
-  console.log('Posts:\n');
+  console.log('\n📋 Posts:\n');
   
   const posts = loadPosts().filter(p => !status || p.status === status);
+  if (posts.length === 0) {
+    console.log('No posts found.');
+    return;
+  }
+
   posts.forEach(p => {
     const badge = {draft: '📝', approved: '✅', exported: '📤'}[p.status] || '•';
     console.log(`${badge} [${p.id}] ${p.status.toUpperCase()}`);
     console.log(`  From: ${p.signal_source}`);
     console.log(`  ${p.content.substring(0, 80)}...`);
   });
+  console.log();
 }
 
 function cmdSetStatus(args) {
@@ -440,7 +600,7 @@ function cmdExportCSV(args) {
 }
 
 async function cmdRebuildProfile() {
-  console.log('Rebuilding Speaker Profile...');
+  console.log('🔨 Rebuilding Speaker Profile...');
   const profile = await buildSpeakerProfile();
   saveProfile(profile);
   console.log('✓ Profile rebuilt');
@@ -469,6 +629,7 @@ function cmdShowPost(args) {
   console.log(`Signal: ${post.signal_title}`);
   console.log(`Created: ${post.created_at}\n`);
   console.log(post.content);
+  console.log();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,11 +648,11 @@ Personal brand amplification using signal sources and authentic voice.
 Usage:
   vibe-kingdom setup                      Initialize setup
   vibe-kingdom fetch-signals              Discover signals from communities
-  vibe-kingdom generate-posts --count N   Generate N draft posts
+  vibe-kingdom generate-posts [--count N] Generate N draft posts
   vibe-kingdom list-posts [--status S]    List posts by status
   vibe-kingdom show-post <id>             View full post
   vibe-kingdom set-status <id> <status>   Mark post as draft/approved/exported
-  vibe-kingdom export-csv [--outfile F]   Export approved posts
+  vibe-kingdom export-csv [--outfile F]   Export approved posts to CSV
   vibe-kingdom rebuild-profile            Rebuild Speaker Profile
   vibe-kingdom show-config                Show configuration
 
