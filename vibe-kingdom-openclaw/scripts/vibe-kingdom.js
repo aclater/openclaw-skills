@@ -191,39 +191,14 @@ function nextBufferSlot(occupiedIso, fromDate, timezone) {
 }
 
 /**
- * Push a post to Buffer for scheduling via the GraphQL API.
- * Set BUFFER_DRY_RUN=1 to skip the HTTP call and return a dry-run result.
+ * Push a single channel to Buffer via GraphQL. Returns { buffer_update_id }.
  */
-async function bufferPush(postId) {
-  const token = process.env.BUFFER_ACCESS_TOKEN;
-  const channelId = process.env.BUFFER_CHANNEL_ID || process.env.BUFFER_PROFILE_ID;
-  if (!token) throw new Error('BUFFER_ACCESS_TOKEN not set');
-  if (!channelId) throw new Error('BUFFER_CHANNEL_ID not set (find it in Buffer Settings → Connected Accounts)');
-
-  const posts = loadPosts();
-  const post = posts.find(p => p.id === postId);
-  if (!post) throw new Error(`Post ${postId} not found`);
-
-  const config = loadConfig();
-  const tz = config.buffer?.timezone || 'America/New_York';
-  const occupiedIso = posts.filter(p => p.scheduled_at && p.id !== postId).map(p => p.scheduled_at);
-  const scheduledAt = nextBufferSlot(occupiedIso, new Date(), tz);
-
-  if (process.env.BUFFER_DRY_RUN === '1') {
-    post.scheduled_at = scheduledAt;
-    post.buffer_update_id = 'dry-run';
-    savePosts(posts);
-    return { dry_run: true, post_id: postId, text: post.content, scheduled_at: scheduledAt, channel_id: channelId };
-  }
-
-  const payload = JSON.stringify({
+function bufferPushToChannel(token, channelId, text, scheduledAt) {
+  const body = JSON.stringify({
     query: `mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
         ... on PostActionSuccess {
-          post {
-            id
-            text
-          }
+          post { id }
         }
         ... on MutationError {
           message
@@ -232,8 +207,8 @@ async function bufferPush(postId) {
     }`,
     variables: {
       input: {
-        channelId: channelId,
-        text: post.content,
+        channelId,
+        text,
         schedulingType: 'automatic',
         mode: 'customScheduled',
         dueAt: scheduledAt
@@ -249,40 +224,71 @@ async function bufferPush(postId) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
-        'Content-Length': Buffer.byteLength(payload)
+        'Content-Length': Buffer.byteLength(body)
       }
     }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        if (res.statusCode === 429) {
-          return reject(new Error('Buffer rate limit hit — try again in a moment'));
-        }
+        if (res.statusCode === 429) return reject(new Error('Buffer rate limit hit — try again in a moment'));
         try {
           const result = JSON.parse(data);
           if (result.errors && result.errors.length > 0) {
             return reject(new Error(`Buffer GraphQL error: ${result.errors.map(e => e.message).join(', ')}`));
           }
-          const payload = result.data?.createPost;
-          if (payload?.post) {
-            post.buffer_update_id = payload.post.id;
-            post.scheduled_at = scheduledAt;
-            savePosts(posts);
-            resolve({ post_id: postId, buffer_update_id: payload.post.id, scheduled_at: scheduledAt });
-          } else if (payload?.message) {
-            reject(new Error(`Buffer error: ${payload.message}`));
-          } else {
-            reject(new Error(`Buffer unexpected response: ${JSON.stringify(result).slice(0, 300)}`));
-          }
+          const p = result.data?.createPost;
+          if (p?.post) resolve({ buffer_update_id: p.post.id });
+          else if (p?.message) reject(new Error(`Buffer error: ${p.message}`));
+          else reject(new Error(`Buffer unexpected response: ${JSON.stringify(result).slice(0, 300)}`));
         } catch (e) {
           reject(new Error(`Buffer response parse error: ${e.message} — raw: ${data.slice(0, 200)}`));
         }
       });
     });
     req.on('error', reject);
-    req.write(payload);
+    req.write(body);
     req.end();
   });
+}
+
+/**
+ * Push a post to all configured Buffer channels.
+ * BUFFER_CHANNEL_ID accepts one ID or a comma-separated list (e.g. LinkedIn,Bluesky).
+ * Set BUFFER_DRY_RUN=1 to skip the HTTP call and return a dry-run result.
+ */
+async function bufferPush(postId) {
+  const token = process.env.BUFFER_ACCESS_TOKEN;
+  const channelEnv = process.env.BUFFER_CHANNEL_ID || process.env.BUFFER_PROFILE_ID;
+  if (!token) throw new Error('BUFFER_ACCESS_TOKEN not set');
+  if (!channelEnv) throw new Error('BUFFER_CHANNEL_ID not set (find it in Buffer Settings → Connected Accounts)');
+
+  const channelIds = channelEnv.split(',').map(s => s.trim()).filter(Boolean);
+
+  const posts = loadPosts();
+  const post = posts.find(p => p.id === postId);
+  if (!post) throw new Error(`Post ${postId} not found`);
+
+  const config = loadConfig();
+  const tz = config.buffer?.timezone || 'America/New_York';
+  const occupiedIso = posts.filter(p => p.scheduled_at && p.id !== postId).map(p => p.scheduled_at);
+  const scheduledAt = nextBufferSlot(occupiedIso, new Date(), tz);
+
+  if (process.env.BUFFER_DRY_RUN === '1') {
+    post.scheduled_at = scheduledAt;
+    post.buffer_update_ids = channelIds.map(id => ({ channel_id: id, buffer_update_id: 'dry-run' }));
+    savePosts(posts);
+    return { dry_run: true, post_id: postId, scheduled_at: scheduledAt, channels: channelIds.length };
+  }
+
+  const results = await Promise.all(channelIds.map(id => bufferPushToChannel(token, id, post.content, scheduledAt)));
+
+  post.scheduled_at = scheduledAt;
+  post.buffer_update_ids = results.map((r, i) => ({ channel_id: channelIds[i], buffer_update_id: r.buffer_update_id }));
+  // Keep legacy field for backward compat
+  post.buffer_update_id = results[0].buffer_update_id;
+  savePosts(posts);
+
+  return { post_id: postId, scheduled_at: scheduledAt, channels: results.length, buffer_update_ids: post.buffer_update_ids };
 }
 
 async function approvePost(postId) {
@@ -310,8 +316,7 @@ async function approveAll() {
   if (drafts.length === 0) { console.log('No draft posts to approve'); return; }
   for (const post of drafts) {
     const result = await approvePost(post.id);
-    if (result?.dry_run) console.log(`[DRY RUN] Post ${post.id} approved — would schedule at ${result.scheduled_at}`);
-    else if (result) console.log(`Post ${post.id} approved — queued for ${result.scheduled_at}`);
+    if (result) console.log(formatPushResult(post.id, result));
   }
 }
 
@@ -1072,7 +1077,12 @@ function cmdShowPost(args) {
   console.log(`Source: ${post.signal_source} — ${post.signal_title}`);
   console.log(`URL: ${post.signal_url}`);
   console.log(`Created: ${post.created_at}`);
-  if (post.scheduled_at) console.log(`Scheduled: ${post.scheduled_at} (Buffer ID: ${post.buffer_update_id})`);
+  if (post.scheduled_at) {
+    const ids = post.buffer_update_ids
+      ? post.buffer_update_ids.map(r => r.buffer_update_id).join(', ')
+      : post.buffer_update_id;
+    console.log(`Scheduled: ${post.scheduled_at} (Buffer IDs: ${ids})`);
+  }
   console.log();
   console.log(post.content);
   console.log();
@@ -1103,13 +1113,18 @@ function cmdSetStatus(args) {
   console.log(`Post ${id} marked as ${newStatus}`);
 }
 
+function formatPushResult(id, result) {
+  if (result.dry_run) return `[DRY RUN] Post ${id} would be scheduled at ${result.scheduled_at} (${result.channels} channel${result.channels !== 1 ? 's' : ''})`;
+  const ch = result.channels > 1 ? ` across ${result.channels} channels` : '';
+  return `Post ${id} queued in Buffer${ch} — scheduled: ${result.scheduled_at}`;
+}
+
 async function cmdBufferPush(args) {
   const id = parseInt(args[0]);
   if (!id) { console.error('Usage: buffer-push <id>'); process.exit(1); }
   try {
     const result = await bufferPush(id);
-    if (result.dry_run) console.log(`[DRY RUN] Post ${id} would be scheduled at ${result.scheduled_at}`);
-    else console.log(`Post ${id} queued in Buffer — scheduled: ${result.scheduled_at}`);
+    console.log(formatPushResult(id, result));
   } catch (e) { console.error(`Buffer push failed: ${e.message}`); process.exit(1); }
 }
 
@@ -1118,8 +1133,8 @@ async function cmdApprove(args) {
   if (!id) { console.error('Usage: approve <id>'); process.exit(1); }
   try {
     const result = await approvePost(id);
-    if (result?.dry_run) console.log(`[DRY RUN] Post ${id} approved — would schedule at ${result.scheduled_at}`);
-    else if (result) console.log(`Post ${id} approved — queued for ${result.scheduled_at}`);
+    if (result?.dry_run) console.log(`[DRY RUN] Post ${id} approved — ${formatPushResult(id, result)}`);
+    else if (result) console.log(`Post ${id} approved — ${formatPushResult(id, result)}`);
     else console.log(`Post ${id} approved`);
   } catch (e) { console.error(e.message); process.exit(1); }
 }
