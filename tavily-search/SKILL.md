@@ -11,7 +11,7 @@ Tavily is a web search API optimized for research, information retrieval, and da
 
 To perform a search:
 
-1. Have your Tavily API key ready: `[API_KEY_REMOVED]`
+1. Set your Tavily API key as an environment variable: `export TAVILY_KEY="your-api-key-here"`
 2. Use the search script with your query
 3. Get back structured results with sources, content, and metadata
 
