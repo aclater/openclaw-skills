@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
+const http = require('http');
 
 const DATA_DIR = path.join(os.homedir(), '.openclaw', 'calendar-briefing');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
@@ -40,6 +41,7 @@ function loadConfig() {
   
   const defaultConfig = {
     calendarUrl: '',
+    iCalUrl: '',
     timezone: 'America/New_York',
     personality: 'natural',
     notifications: {
@@ -69,12 +71,116 @@ function loadState() {
     lastChecked: null,
     lastCalendarHash: null,
     events: [],
-    lastPersonality: 'natural'
+    lastPersonality: 'natural',
+    lastFetch: null
   };
 }
 
 function saveState(state) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+/**
+ * Fetch iCal data from Google Calendar
+ */
+function fetchICalData(iCalUrl) {
+  return new Promise((resolve, reject) => {
+    const protocol = iCalUrl.startsWith('https') ? https : http;
+    
+    protocol.get(iCalUrl, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          resolve(data);
+        } else {
+          reject(new Error(`HTTP ${res.statusCode}`));
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+/**
+ * Parse iCal format to extract events
+ */
+function parseICalEvents(iCalData) {
+  const events = [];
+  const lines = iCalData.split('\n');
+  let currentEvent = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed === 'BEGIN:VEVENT') {
+      currentEvent = {};
+    } else if (trimmed === 'END:VEVENT' && currentEvent) {
+      events.push(currentEvent);
+      currentEvent = null;
+    } else if (currentEvent && trimmed.includes(':')) {
+      const [key, ...valueParts] = trimmed.split(':');
+      const value = valueParts.join(':');
+      
+      if (key === 'DTSTART' || key === 'DTSTART;VALUE=DATE') {
+        currentEvent.startDate = parseICalDate(value);
+      } else if (key === 'DTEND' || key === 'DTEND;VALUE=DATE') {
+        currentEvent.endDate = parseICalDate(value);
+      } else if (key === 'SUMMARY') {
+        currentEvent.title = decodeICalValue(value);
+      } else if (key === 'DESCRIPTION') {
+        currentEvent.description = decodeICalValue(value);
+      } else if (key === 'LOCATION') {
+        currentEvent.location = decodeICalValue(value);
+      } else if (key.startsWith('DTSTART')) {
+        // Full datetime with timezone
+        const match = value.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
+        if (match) {
+          const [, year, month, day, hour, min] = match;
+          currentEvent.startDate = `${year}-${month}-${day}`;
+          currentEvent.startTime = `${hour}:${min}`;
+          currentEvent.isAllDay = false;
+        }
+      }
+    }
+  }
+
+  return events.filter(e => e.title && e.startDate);
+}
+
+/**
+ * Parse iCal date format: YYYYMMDD or YYYYMMDDTHHMMSS
+ */
+function parseICalDate(dateStr) {
+  if (!dateStr) return null;
+
+  if (dateStr.length === 8) {
+    // All-day event: YYYYMMDD
+    return {
+      date: `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`,
+      isAllDay: true,
+      time: null
+    };
+  } else if (dateStr.includes('T')) {
+    // Timed event: YYYYMMDDTHHMMSS
+    const [date, time] = dateStr.split('T');
+    return {
+      date: `${date.substring(0, 4)}-${date.substring(4, 6)}-${date.substring(6, 8)}`,
+      time: `${time.substring(0, 2)}:${time.substring(2, 4)}`,
+      isAllDay: false
+    };
+  }
+  return null;
+}
+
+/**
+ * Decode iCal escaped values
+ */
+function decodeICalValue(value) {
+  return value
+    .replace(/\\,/g, ',')
+    .replace(/\\;/g, ';')
+    .replace(/\\n/g, '\n')
+    .replace(/\\\\/g, '\\');
 }
 
 /**
@@ -150,90 +256,56 @@ function loadPersonality(mode) {
 }
 
 /**
- * Mock calendar fetch (in real implementation, would parse iCal)
- */
-async function fetchCalendarEvents(url) {
-  // For demo, return mock events
-  const today = new Date();
-  const mockEvents = [
-    {
-      date: formatDate(today),
-      time: '09:00',
-      title: '9am call',
-      duration: 60,
-      allDay: false
-    },
-    {
-      date: formatDate(today),
-      time: '14:00',
-      title: '2pm meeting',
-      duration: 60,
-      allDay: false
-    },
-    {
-      date: formatDate(today),
-      time: '16:00',
-      title: '4pm sync',
-      duration: 60,
-      allDay: false
-    },
-    {
-      date: formatDate(addDays(today, 1)),
-      time: '10:00',
-      title: 'All-hands standup',
-      duration: 30,
-      allDay: false
-    },
-    {
-      date: formatDate(addDays(today, 1)),
-      time: '14:00',
-      title: 'Architecture review',
-      duration: 90,
-      allDay: false
-    }
-  ];
-  
-  return mockEvents;
-}
-
-/**
  * Generate natural language briefing
  */
 function generateBriefing(events, personality, date) {
   const personalityMode = loadPersonality(personality);
   const dayOfWeek = getDayOfWeek(date);
   const isMonday = dayOfWeek === 'Monday';
+  const dateStr = formatDate(date);
   
-  let briefing = personalityMode.opening;
-  
-  // Check if we should do week summary
+  let briefing = '';
+
   if (isMonday) {
     briefing = personalityMode.weekOpening + '\n\n';
     
     // Week view
     const weekEvents = groupEventsByDay(events, date);
-    Object.entries(weekEvents).forEach(([day, dayEvents]) => {
+    for (let i = 0; i < 7; i++) {
+      const dayDate = addDays(date, i);
+      const day = getDayOfWeek(dayDate);
+      const dayEvents = events.filter(e => e.startDate.date === formatDate(dayDate));
+      
       if (dayEvents.length > 0) {
-        const times = dayEvents.map(e => `${e.time}`).join(', ');
-        briefing += `${day}: ${dayEvents.length} engagement${dayEvents.length > 1 ? 's' : ''} (${times})\n`;
+        const times = dayEvents
+          .filter(e => e.startTime)
+          .map(e => e.startTime)
+          .sort()
+          .join(', ');
+        const label = times ? ` (${times})` : '';
+        briefing += `${day}: ${dayEvents.length} engagement${dayEvents.length > 1 ? 's' : ''}${label}\n`;
+      } else {
+        briefing += `${day}: Clear\n`;
       }
-    });
+    }
   } else {
-    // Today only
-    const todayEvents = events.filter(e => e.date === formatDate(date));
+    briefing = personalityMode.opening + ' ';
+    
+    // Today
+    const todayEvents = events.filter(e => e.startDate.date === dateStr);
     if (todayEvents.length === 0) {
-      briefing += ' You\'re clear today.';
+      briefing += 'You\'re clear today.';
     } else {
-      briefing += ' ';
-      const times = todayEvents.map(e => `${e.time}`).join(', ');
+      const timedEvents = todayEvents.filter(e => e.startTime).sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const times = timedEvents.map(e => e.startTime).join(', ');
       briefing += `You have ${todayEvents.length} engagement${todayEvents.length > 1 ? 's' : ''}: ${times}.`;
       
-      if (todayEvents.length >= 3) {
+      if (timedEvents.length >= 3) {
         briefing += ' This is a busy day.';
       }
     }
   }
-  
+
   return briefing;
 }
 
@@ -241,7 +313,10 @@ function generateBriefing(events, personality, date) {
  * Utility functions
  */
 function formatDate(date) {
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function addDays(date, days) {
@@ -260,13 +335,13 @@ function groupEventsByDay(events, startDate) {
   for (let i = 0; i < 7; i++) {
     const date = addDays(startDate, i);
     const day = getDayOfWeek(date);
-    grouped[day] = events.filter(e => e.date === formatDate(date));
+    grouped[day] = events.filter(e => e.startDate.date === formatDate(date));
   }
   return grouped;
 }
 
 function hashEvents(events) {
-  return JSON.stringify(events);
+  return JSON.stringify(events.map(e => `${e.startDate.date}${e.startTime || ''}${e.title}`).sort());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,19 +356,22 @@ async function cmdSetup() {
   
   const config = loadConfig();
   
-  if (!config.calendarUrl) {
-    console.log('⚠️  No calendar URL configured yet.');
-    console.log('Go to Google Calendar → Settings → Integrate calendar');
-    console.log('Copy your public calendar URL and update:');
-    console.log(`  ${CONFIG_FILE}`);
-    console.log('\nThen run: calendar-briefing briefing\n');
-  } else {
-    console.log('✓ Configuration found');
-    console.log(`  Calendar: ${config.calendarUrl.substring(0, 50)}...`);
-    console.log(`  Personality: ${config.personality}`);
-  }
+  console.log('To use calendar-briefing with your Google Calendar:\n');
+  console.log('1. Open your Google Calendar');
+  console.log('2. Right-click your calendar → "Settings"');
+  console.log('3. Scroll to "Integrate calendar"');
+  console.log('4. Copy the iCal (.ics) URL\n');
+  console.log('5. Edit this file and add iCalUrl:');
+  console.log(`   ${CONFIG_FILE}\n`);
+  console.log('Example config:');
+  console.log(JSON.stringify({
+    iCalUrl: 'https://calendar.google.com/calendar/ical/.../basic.ics',
+    timezone: 'America/New_York',
+    personality: 'natural'
+  }, null, 2));
+  console.log('\nThen run: calendar-briefing briefing\n');
   
-  console.log('\nAvailable personalities:');
+  console.log('Available personalities:');
   console.log('  - natural (default, your authentic voice)');
   console.log('  - picard (Captain Picard formality)');
   console.log('  - jarvis (British AI butler)');
@@ -305,8 +383,8 @@ async function cmdBriefing(args) {
   const config = loadConfig();
   const state = loadState();
   
-  if (!config.calendarUrl) {
-    console.error('❌ Calendar URL not configured. Run: calendar-briefing setup');
+  if (!config.iCalUrl) {
+    console.error('❌ iCal URL not configured. Run: calendar-briefing setup');
     process.exit(1);
   }
   
@@ -314,20 +392,30 @@ async function cmdBriefing(args) {
     const personality = args.personality || config.personality;
     const date = args.date ? new Date(args.date) : new Date();
     
-    // Fetch events
-    const events = await fetchCalendarEvents(config.calendarUrl);
+    console.log('📅 Fetching calendar...');
+    const iCalData = await fetchICalData(config.iCalUrl);
+    const events = parseICalEvents(iCalData);
+    
+    // Filter to this week and next
+    const weekStart = addDays(new Date(), -7);
+    const weekEnd = addDays(new Date(), 14);
+    const filteredEvents = events.filter(e => {
+      const eventDate = new Date(e.startDate.date);
+      return eventDate >= weekStart && eventDate <= weekEnd;
+    });
     
     // Generate briefing
-    const briefing = generateBriefing(events, personality, date);
+    const briefing = generateBriefing(filteredEvents, personality, date);
     console.log('\n' + briefing + '\n');
     
     // Save state
     state.lastChecked = new Date().toISOString();
-    state.lastCalendarHash = hashEvents(events);
+    state.lastCalendarHash = hashEvents(filteredEvents);
     state.lastPersonality = personality;
+    state.lastFetch = new Date().toISOString();
     saveState(state);
   } catch (e) {
-    console.error('Error generating briefing:', e.message);
+    console.error('❌ Error generating briefing:', e.message);
     process.exit(1);
   }
 }
@@ -336,8 +424,8 @@ async function cmdTomorrow(args) {
   ensureDirectories();
   const config = loadConfig();
   
-  if (!config.calendarUrl) {
-    console.error('❌ Calendar URL not configured. Run: calendar-briefing setup');
+  if (!config.iCalUrl) {
+    console.error('❌ iCal URL not configured. Run: calendar-briefing setup');
     process.exit(1);
   }
   
@@ -345,8 +433,11 @@ async function cmdTomorrow(args) {
     const personality = args.personality || config.personality;
     const tomorrow = addDays(new Date(), 1);
     
-    const events = await fetchCalendarEvents(config.calendarUrl);
-    const tomorrowEvents = events.filter(e => e.date === formatDate(tomorrow));
+    console.log('📅 Fetching calendar...');
+    const iCalData = await fetchICalData(config.iCalUrl);
+    const events = parseICalEvents(iCalData);
+    
+    const tomorrowEvents = events.filter(e => e.startDate.date === formatDate(tomorrow));
     
     const personalityMode = loadPersonality(personality);
     console.log(`\n📅 Here's what tomorrow (${getDayOfWeek(tomorrow)}) looks like:\n`);
@@ -354,11 +445,16 @@ async function cmdTomorrow(args) {
     if (tomorrowEvents.length === 0) {
       console.log('You\'re clear tomorrow. Good breathing room.\n');
     } else {
-      const times = tomorrowEvents.map(e => `${e.time} - ${e.title}`).join('\n');
-      console.log(times + '\n');
+      tomorrowEvents
+        .filter(e => e.startTime)
+        .sort((a, b) => a.startTime.localeCompare(b.startTime))
+        .forEach(e => {
+          console.log(`${e.startTime} - ${e.title}`);
+        });
+      console.log();
     }
   } catch (e) {
-    console.error('Error:', e.message);
+    console.error('❌ Error:', e.message);
     process.exit(1);
   }
 }
@@ -368,13 +464,14 @@ async function cmdCheckChanges() {
   const config = loadConfig();
   const state = loadState();
   
-  if (!config.calendarUrl) {
-    console.error('❌ Calendar URL not configured.');
+  if (!config.iCalUrl) {
+    console.error('❌ iCal URL not configured.');
     process.exit(1);
   }
   
   try {
-    const events = await fetchCalendarEvents(config.calendarUrl);
+    const iCalData = await fetchICalData(config.iCalUrl);
+    const events = parseICalEvents(iCalData);
     const currentHash = hashEvents(events);
     
     if (state.lastCalendarHash === null) {
@@ -390,7 +487,7 @@ async function cmdCheckChanges() {
     state.lastCalendarHash = currentHash;
     saveState(state);
   } catch (e) {
-    console.error('Error checking changes:', e.message);
+    console.error('❌ Error checking changes:', e.message);
     process.exit(1);
   }
 }
@@ -494,7 +591,7 @@ Data: ${DATA_DIR}
         process.exit(1);
     }
   } catch (e) {
-    console.error('Error:', e.message);
+    console.error('❌ Error:', e.message);
     process.exit(1);
   }
 }
