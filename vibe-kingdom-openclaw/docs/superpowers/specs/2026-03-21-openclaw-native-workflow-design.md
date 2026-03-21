@@ -13,11 +13,24 @@ Replace the CSV export step with an end-to-end workflow inside OpenClaw: a dedic
 
 ---
 
+## Deployment Model
+
+All skill code lives in this git repository. OpenClaw pulls the skill into the container's own home directory (`/home/openclaw/`). No bind mounts from outside the container are required or permitted. The script runs as the `openclaw` user inside the container, so `os.homedir()` resolves to `/home/openclaw/` — the existing default data path `~/.openclaw/vibe-kingdom/` is correct as-is and requires no override.
+
+**What this skill does NOT touch in openclaw:**
+- Does not modify `openclaw.json` programmatically
+- Does not modify the quadlet unit file
+- Does not set up the agent definition or cron job automatically
+
+The agent definition and cron job are one-time manual setup steps the user performs through the OpenClaw UI. They are documented in detail in `README.md`. The only required direct configuration is populating four API keys, which are documented prominently in the README.
+
+---
+
 ## Architecture
 
 ### 1. vibe-kingdom.js — Tool Library
 
-The script remains CLI-runnable. The existing `set-status <id> <status>` command is **retained for manual/backward-compatible use only** — it does NOT trigger a Buffer push regardless of the status value set. Two new dedicated commands replace `set-status` as the primary approval mechanism:
+The script remains CLI-runnable. The existing `set-status <id> <status>` command is **retained for manual/backward-compatible use only** — it does NOT trigger a Buffer push regardless of the status value set. New dedicated commands are the primary approval mechanism:
 
 | Command | Behaviour |
 |---|---|
@@ -31,16 +44,18 @@ The script remains CLI-runnable. The existing `set-status <id> <status>` command
 | `reject <id>` | **New** — marks post rejected in posts.json, no Buffer push |
 | `buffer-push <id>` | **New** — pushes a single post to Buffer at next available slot (also called by `approve`) |
 
+**Data path:** `DATA_DIR` defaults to `~/.openclaw/vibe-kingdom/` via `os.homedir()`. No env var override is needed or introduced — `os.homedir()` returns the correct path whether the script is run by the openclaw container user or a developer on their local machine.
+
 **Buffer integration (`buffer-push`):**
-- Verify current endpoint before implementation; Buffer has historically served `POST https://api.bufferapp.com/1/updates/create.json` but may have migrated to `https://api.buffer.com/` — check Buffer's developer docs for the current publishing endpoint.
-- Auth: `BUFFER_ACCESS_TOKEN` env var (personal access token)
+- Verify current endpoint before implementation; historically `POST https://api.bufferapp.com/1/updates/create.json` — check Buffer's developer docs for the current publishing endpoint before coding.
+- Auth: `BUFFER_ACCESS_TOKEN` env var
 - Target profile: `BUFFER_PROFILE_ID` env var (LinkedIn profile ID in Buffer)
 - Scheduling: compute next available slot using `nextBufferSlot()` (see below), pass as `scheduled_at` in ISO 8601
 - On success: update post record with `buffer_update_id` and `scheduled_at`
 
 **Slot scheduling algorithm (`nextBufferSlot`):**
 
-The function must ensure no two posts share the same scheduled time. Algorithm:
+Ensures no two posts share the same scheduled time:
 
 1. Load all posts where `scheduled_at` is set (already queued)
 2. Build a set of occupied timestamps
@@ -49,74 +64,60 @@ The function must ensure no two posts share the same scheduled time. Algorithm:
 5. Return the first slot not in the occupied set
 6. Timezone: read from `config.buffer.timezone` (default `America/New_York`)
 
-This means approving three posts in a row will schedule them at e.g. Tue 4:00pm, Tue 4:15pm, Tue 4:30pm — or spill across days if the window fills up.
-
-**Data path:**
-
-`DATA_DIR` must be configurable via a `VIBE_KINGDOM_DATA_DIR` environment variable so the path is not hardcoded to the invoking user's home directory. Default fallback is `~/.openclaw/vibe-kingdom/` (resolved via `os.homedir()` at runtime). The OpenClaw agent tool definition must explicitly set `VIBE_KINGDOM_DATA_DIR=/home/aclater/.openclaw/vibe-kingdom` to ensure the correct user's data is used regardless of which OS user OpenClaw runs as.
+Approving three posts in a row will schedule them at e.g. Tue 4:00pm, Tue 4:15pm, Tue 4:30pm — spilling across days if the window fills up.
 
 ---
 
-### 2. OpenClaw Vibe Kingdom Agent
+### 2. OpenClaw Vibe Kingdom Agent (manual setup, documented in README)
 
-A dedicated agent entry in `~/.openclaw/openclaw.json`:
+The user creates a dedicated agent in the OpenClaw UI with the following configuration. This is a one-time step; the README provides copy-paste values.
 
-```json
-{
-  "agents": {
-    "vibe-kingdom": {
-      "name": "Vibe Kingdom",
-      "description": "LinkedIn content pipeline — fetch signals, review draft posts, approve to Buffer",
-      "tools": [
-        {
-          "type": "shell",
-          "command": "node /home/aclater/openclaw-skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js",
-          "env": {
-            "VIBE_KINGDOM_DATA_DIR": "/home/aclater/.openclaw/vibe-kingdom",
-            "ANTHROPIC_API_KEY": "ENV:ANTHROPIC_API_KEY",
-            "TAVILY_API_KEY": "ENV:TAVILY_API_KEY",
-            "BUFFER_ACCESS_TOKEN": "ENV:BUFFER_ACCESS_TOKEN",
-            "BUFFER_PROFILE_ID": "ENV:BUFFER_PROFILE_ID"
-          }
-        }
-      ],
-      "systemPrompt": "You are the Vibe Kingdom content pipeline for Adam Clater. Your job is to fetch technical signals, generate LinkedIn draft posts in Adam's voice, and help him review and publish them to Buffer.\n\nWhen presenting draft posts: list them numerically with ID, source, and first 40 words. Keep it scannable.\n\nAccept approval commands:\n- 'approve <id>' — approve a single post and queue to Buffer\n- 'approve all' — natural-language trigger; map to the approve-all CLI command (the CLI does not accept a space-separated form — do NOT create one)\n- 'reject <id>' — reject a post\n- 'show <id>' — show full post content\n\nAfter each approval, confirm the Buffer scheduled time. After reviewing all posts, summarise what was queued and what was rejected.\n\nStay focused on the content pipeline. Do not engage in general conversation."
-    }
-  }
-}
+**Tool command** (path assumes OpenClaw pulls skills to `~/.openclaw/skills/`; adjust if your OpenClaw uses a different skills directory):
+```
+node ~/.openclaw/skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js
 ```
 
-> **Note:** The exact `openclaw.json` schema for agent and tool definitions should be verified against OpenClaw's documentation or the running instance's config before writing. The structure above is illustrative — field names (`tools`, `type`, `command`, `env`) must match what OpenClaw actually parses.
+**Required env vars** (set in agent tool env or OpenClaw global env — see README):
+- `ANTHROPIC_API_KEY`
+- `TAVILY_API_KEY`
+- `BUFFER_ACCESS_TOKEN`
+- `BUFFER_PROFILE_ID`
 
-The agent session is isolated — it does not appear in the main chat timeline.
+**System prompt:**
+```
+You are the Vibe Kingdom content pipeline. Your job is to fetch technical
+signals, generate LinkedIn draft posts, and help review and publish them to
+Buffer.
+
+When presenting draft posts: list them numerically with ID, source, and first
+40 words. Keep it scannable.
+
+Accept approval commands:
+- "approve <id>" — approve a single post and queue to Buffer
+- "approve all" — natural-language trigger; call the approve-all command
+  (do NOT create a space-separated CLI branch)
+- "reject <id>" — reject a post
+- "show <id>" — show full post content
+
+After each approval, confirm the Buffer scheduled time. After reviewing all
+posts, summarise what was queued and what was rejected.
+
+Stay focused on the content pipeline. Do not engage in general conversation.
+```
 
 ---
 
-### 3. OpenClaw Cron Job
+### 3. OpenClaw Cron Job (manual setup, documented in README)
 
-A cron entry that wakes the vibe-kingdom agent on a schedule:
+The user creates a cron job in the OpenClaw UI:
 
-```json
-{
-  "cron": [
-    {
-      "name": "vibe-kingdom-fetch",
-      "description": "Fetch signals and generate draft LinkedIn posts",
-      "schedule": "0 8 * * 1,4",
-      "agentId": "vibe-kingdom",
-      "session": "isolated",
-      "payloadKind": "agentTurn",
-      "prompt": "Fetch new signals and generate 5 draft posts. Present them for review.",
-      "enabled": true
-    }
-  ]
-}
-```
+- **Name:** `vibe-kingdom-fetch`
+- **Schedule:** `0 8 * * 1,4` — Monday and Thursday at 8am
+- **Agent:** `vibe-kingdom`
+- **Session:** isolated
+- **Prompt:** `Fetch new signals and generate 5 draft posts. Present them for review.`
 
-- **Schedule:** Monday and Thursday at 8am (gives posts time to land before Tue/Wed/Fri publishing windows)
-- **Session:** isolated — runs in its own session, not the main chat
-
-**Main chat announcement:** If OpenClaw supports delivery of cron run summaries to the main chat timeline (configurable in the cron job's `resultDelivery` field), set it to announce. If not supported, the cron run completes silently and the user opens the vibe-kingdom session manually to review. Do not assume this feature exists — verify against OpenClaw docs.
+If OpenClaw supports delivery of cron run summaries to the main chat timeline, enable it so the user is notified when new posts are ready. This is optional — if not supported, the user opens the vibe-kingdom session manually.
 
 ---
 
@@ -141,7 +142,7 @@ User opens vibe-kingdom session
 
   → user says "approve all"
   → agent calls: vibe-kingdom.js approve-all
-    → each remaining draft approved sequentially
+    → each remaining draft approved sequentially (ascending by post ID)
     → each gets its own Buffer slot (no collisions)
     → agent confirms all scheduled times
 ```
@@ -166,79 +167,51 @@ New keys added to `~/.openclaw/vibe-kingdom/config.json`:
 }
 ```
 
-Environment variables required:
-- `BUFFER_ACCESS_TOKEN` — Buffer personal access token
-- `BUFFER_PROFILE_ID` — Buffer LinkedIn profile ID in Buffer account
-- `VIBE_KINGDOM_DATA_DIR` — Absolute path to data directory (set in agent tool definition)
-
 ---
 
 ## What Changes in vibe-kingdom.js
 
 ### Approval and Buffer commands
-1. Make `DATA_DIR` read from `process.env.VIBE_KINGDOM_DATA_DIR` with fallback to `~/.openclaw/vibe-kingdom/`
-2. Add `approve <id>` command: update status to `approved`, call `bufferPush(id)`
-3. Add `approve-all` command: load all drafts sorted ascending by post ID, call `approve` on each sequentially
-4. Add `reject <id>` command: update status to `rejected`
-5. Add `bufferPush(id)` function: call `nextBufferSlot()`, POST to Buffer API, update post record
-6. Add `nextBufferSlot(config)` function: iterate Tue/Wed/Fri 4–5pm windows, avoid occupied timestamps
-7. Load Buffer config from `config.buffer` block
-8. `set-status` unchanged — does not trigger Buffer
+1. Add `approve <id>` command: update status to `approved`, call `bufferPush(id)`
+2. Add `approve-all` command: load all drafts sorted ascending by post ID, call `approve` on each sequentially
+3. Add `reject <id>` command: update status to `rejected`
+4. Add `bufferPush(id)` function: call `nextBufferSlot()`, POST to Buffer API, update post record
+5. Add `nextBufferSlot(config)` function: iterate Tue/Wed/Fri 4–5pm windows, avoid occupied timestamps
+6. Load Buffer config from `config.buffer` block
+7. `set-status` unchanged — does not trigger Buffer
 
 ### Post generation improvements
-The current generation has three fixable defects:
 
-**A. Token limit too low.** `callClaude(..., 512)` in `generatePostFromSignal` truncates posts mid-thought. Change to 1024 tokens minimum for post generation calls.
+**A. Include source URL in every post.**
+The signal's URL is already passed in the user prompt (`URL: ${signal.url}`). Add an explicit instruction: *"End every post with the source URL on its own line. No label, just the URL."* This gives readers context and drives traffic to the original discussion.
 
-**B. Opener repetition.** The system prompt passes the openers list as a flat `Openers:` field, causing Claude to default to the first item ("Been thinking about..."). The fallback on API error also always uses `openers[0]`. Fix:
+**B. Token limit too low.** `callClaude(..., 512)` in `generatePostFromSignal` truncates posts mid-thought. Change to **1024 tokens** for post generation calls.
+
+**C. Opener repetition.** The system prompt passes `Openers: ${profile.openers.join(' | ')}`, causing Claude to default to the first item ("Been thinking about..."). The API error fallback also always uses `openers[0]`. Fix:
 - Remove the `Openers:` line from the system prompt entirely
-- Replace with an explicit instruction: *"Never open with 'Been thinking about'. Vary openers naturally — sometimes lead with a direct observation, sometimes with a question, sometimes mid-story. Never start two posts with the same phrase."*
-- Fallback text on API error should not use `openers[0]`; use a neutral placeholder or surface the error cleanly
+- Replace with: *"Vary openers naturally — sometimes lead with a direct observation, sometimes with a question, sometimes mid-story. Never open with 'Been thinking about'. Never start two posts with the same phrase."*
+- Remove `openers[0]` from the error fallback; surface the error message cleanly instead
 
-**C. No structural guidance.** Posts come out as one dense block or a single sentence. Add to the system prompt:
-- *"A good post has 2–4 short paragraphs. First paragraph: one concrete observation or hook. Middle: the insight or tension — what's actually hard about this. End: what it means for practitioners, or a question that invites response."*
-- *"Vary length: some posts are 80 words and direct, some are 200–250 words and walk through reasoning. Don't always write the maximum."*
-- *"Plain text. No bullet lists. No headers. No hashtags. No emojis. Write the way a senior engineer talks to a peer, not the way a marketer writes content."*
+**D. No structural guidance.** Posts come out as one dense block or a single truncated sentence. Add to the system prompt:
+- *"A good post has 2–4 short paragraphs. First: one concrete observation or hook. Middle: the insight or tension — what's actually hard about this. End: what it means for practitioners, or a question that invites response."*
+- *"Vary length naturally: some posts are 80 words and direct, some are 200–250 words and walk through reasoning."*
+- *"Plain text only. No bullet lists. No headers. No hashtags. No emojis. Write the way a senior engineer talks to a peer, not the way a marketer writes content."*
 
-## What's Added to openclaw.json
+---
 
-1. `vibe-kingdom` agent definition (name, system prompt, tool command, env vars)
-2. Cron job entry: Mon/Thu 8am, isolated session, fetch+generate prompt
+## What's in README.md
 
-## Container / Quadlet Architecture
+The README must document the following clearly, as these are the only manual steps required of the user:
 
-OpenClaw runs as user `openclaw` inside a rootless Podman container launched via a systemd quadlet. Paths like `/home/aclater/...` do not exist inside the container by default. Two things must be addressed:
-
-### Volume mounts in the quadlet unit file
-
-The quadlet (e.g. `~/.config/containers/systemd/openclaw.container`) needs two bind mounts:
-
-```ini
-[Container]
-# ...existing config...
-Volume=/home/aclater/openclaw-skills:/opt/openclaw-skills:ro,z
-Volume=/home/aclater/.openclaw/vibe-kingdom:/data/vibe-kingdom:rw,z
-```
-
-- `ro,z` on the skills directory — the container only needs to read and execute the script
-- `rw,z` on the data directory — posts.json, signals.json, config.json must be writable
-- `:z` sets the SELinux label so the container process can access the host path (required on RHEL/Fedora)
-
-After editing the quadlet, reload and restart: `systemctl --user daemon-reload && systemctl --user restart openclaw`
-
-### Tool command and data path inside openclaw.json
-
-The agent tool definition uses container-internal paths:
-
-```json
-"command": "node /opt/openclaw-skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js",
-"env": {
-  "VIBE_KINGDOM_DATA_DIR": "/data/vibe-kingdom",
-  ...
-}
-```
-
-`VIBE_KINGDOM_DATA_DIR=/data/vibe-kingdom` overrides the `os.homedir()` default so the script reads/writes to the mounted host directory regardless of which user (`openclaw`) the container runs as.
+1. **Prerequisites** — Node.js, an OpenClaw instance with this skill installed
+2. **Required API keys** — with links to where to obtain each:
+   - `ANTHROPIC_API_KEY` — [console.anthropic.com](https://console.anthropic.com)
+   - `TAVILY_API_KEY` — [app.tavily.com](https://app.tavily.com)
+   - `BUFFER_ACCESS_TOKEN` — Buffer app settings → Developer → Access Token
+   - `BUFFER_PROFILE_ID` — Buffer profile ID for your LinkedIn account
+3. **Where to set the keys** — in OpenClaw's environment/secrets UI (not in the skill config files)
+4. **One-time agent setup** — copy-paste values for agent name, tool command, system prompt, and env vars
+5. **One-time cron setup** — copy-paste values for the cron job
 
 ---
 
@@ -248,4 +221,4 @@ The agent tool definition uses container-internal paths:
 - Post editing in OpenClaw (use `regenerate-post` CLI if needed)
 - Multi-platform posting (LinkedIn only for now)
 - Analytics/engagement tracking
-- Buffer v2 API migration (use current stable endpoint, note to verify)
+- Automatic openclaw.json configuration (user sets up agent and cron manually via UI)
