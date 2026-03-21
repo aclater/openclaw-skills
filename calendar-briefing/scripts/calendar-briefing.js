@@ -236,12 +236,12 @@ function callClaude(prompt) {
       reject(new Error('ANTHROPIC_API_KEY not set'));
       return;
     }
-    const payload = JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
+    const payload = Buffer.from(JSON.stringify({
+      model: 'claude-sonnet-4-6',
       max_tokens: 512,
       temperature: 0.7,
       messages: [{ role: 'user', content: prompt }]
-    });
+    }));
     const req = https.request({
       hostname: 'api.anthropic.com',
       path: '/v1/messages',
