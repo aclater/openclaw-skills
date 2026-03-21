@@ -21,10 +21,8 @@ Set these in OpenClaw's environment/secrets UI — **not** in any config file.
 |-----|----------------|
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
 | `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) → API |
-| `BUFFER_ACCESS_TOKEN` | Buffer → Settings → Apps & API → Access Token |
-| `BUFFER_PROFILE_ID` | Run `curl "https://api.bufferapp.com/1/profiles.json?access_token=YOUR_TOKEN"` and find the `id` for your LinkedIn profile |
-
-> **Note:** Buffer's public API is currently being rebuilt. Set `BUFFER_DRY_RUN=1` to run in dry-run mode (slots are computed and stored locally, no HTTP call is made) until the new API launches. See [buffer.com/developers/api](https://buffer.com/developers/api).
+| `BUFFER_ACCESS_TOKEN` | Buffer → Settings → Apps & API → Access Token (OAuth Bearer token) |
+| `BUFFER_CHANNEL_ID` | Buffer → Settings → Connected Accounts → your LinkedIn account ID (looks like `507xxxxxxxxxxxxxxxxxxxxxxx`) |
 
 ---
 

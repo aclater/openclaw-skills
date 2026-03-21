@@ -196,9 +196,9 @@ function nextBufferSlot(occupiedIso, fromDate, timezone) {
  */
 async function bufferPush(postId) {
   const token = process.env.BUFFER_ACCESS_TOKEN;
-  const profileId = process.env.BUFFER_PROFILE_ID;
+  const channelId = process.env.BUFFER_CHANNEL_ID || process.env.BUFFER_PROFILE_ID;
   if (!token) throw new Error('BUFFER_ACCESS_TOKEN not set');
-  if (!profileId) throw new Error('BUFFER_PROFILE_ID not set');
+  if (!channelId) throw new Error('BUFFER_CHANNEL_ID not set (find it in Buffer Settings → Connected Accounts)');
 
   const posts = loadPosts();
   const post = posts.find(p => p.id === postId);
@@ -213,18 +213,52 @@ async function bufferPush(postId) {
     post.scheduled_at = scheduledAt;
     post.buffer_update_id = 'dry-run';
     savePosts(posts);
-    return { dry_run: true, post_id: postId, text: post.content, scheduled_at: scheduledAt, profile_id: profileId };
+    return { dry_run: true, post_id: postId, text: post.content, scheduled_at: scheduledAt, channel_id: channelId };
   }
 
-  // TODO: Replace this block with real Buffer API call once their new public API launches.
-  // Buffer's v1 API (api.bufferapp.com) is currently broken (returns 500).
-  // Buffer is rebuilding their Public API — see https://buffer.com/developers/api
-  // When available, implement: POST to the scheduling endpoint with access_token,
-  // profile_ids[], text, and scheduled_at params. Update post.buffer_update_id and
-  // post.scheduled_at on success, then call savePosts(posts).
-  throw new Error(
-    'Buffer API is currently unavailable (being rebuilt). Use BUFFER_DRY_RUN=1 or wait for Buffer\'s new API. See https://buffer.com/developers/api'
-  );
+  const payload = JSON.stringify({
+    text: post.content,
+    channels: [channelId],
+    scheduled_at: scheduledAt,
+    type: 'post'
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.bufferapp.com',
+      path: '/2024/schedules',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        if (res.statusCode === 429) {
+          return reject(new Error('Buffer rate limit hit — try again in a moment'));
+        }
+        try {
+          const result = JSON.parse(data);
+          if (res.statusCode === 200 || res.statusCode === 201) {
+            post.buffer_update_id = result.id;
+            post.scheduled_at = scheduledAt;
+            savePosts(posts);
+            resolve({ post_id: postId, buffer_update_id: result.id, scheduled_at: scheduledAt });
+          } else {
+            reject(new Error(`Buffer error: ${result.error?.message || JSON.stringify(result)}`));
+          }
+        } catch (e) {
+          reject(new Error(`Buffer response parse error: ${e.message} — raw: ${data.slice(0, 200)}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
 }
 
 async function approvePost(postId) {
