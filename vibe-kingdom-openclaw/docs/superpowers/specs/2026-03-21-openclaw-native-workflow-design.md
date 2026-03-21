@@ -175,19 +175,70 @@ Environment variables required:
 
 ## What Changes in vibe-kingdom.js
 
+### Approval and Buffer commands
 1. Make `DATA_DIR` read from `process.env.VIBE_KINGDOM_DATA_DIR` with fallback to `~/.openclaw/vibe-kingdom/`
 2. Add `approve <id>` command: update status to `approved`, call `bufferPush(id)`
-3. Add `approve-all` command: load all drafts, call `approve` on each sequentially
+3. Add `approve-all` command: load all drafts sorted ascending by post ID, call `approve` on each sequentially
 4. Add `reject <id>` command: update status to `rejected`
 5. Add `bufferPush(id)` function: call `nextBufferSlot()`, POST to Buffer API, update post record
 6. Add `nextBufferSlot(config)` function: iterate Tue/Wed/Fri 4–5pm windows, avoid occupied timestamps
 7. Load Buffer config from `config.buffer` block
 8. `set-status` unchanged — does not trigger Buffer
 
+### Post generation improvements
+The current generation has three fixable defects:
+
+**A. Token limit too low.** `callClaude(..., 512)` in `generatePostFromSignal` truncates posts mid-thought. Change to 1024 tokens minimum for post generation calls.
+
+**B. Opener repetition.** The system prompt passes the openers list as a flat `Openers:` field, causing Claude to default to the first item ("Been thinking about..."). The fallback on API error also always uses `openers[0]`. Fix:
+- Remove the `Openers:` line from the system prompt entirely
+- Replace with an explicit instruction: *"Never open with 'Been thinking about'. Vary openers naturally — sometimes lead with a direct observation, sometimes with a question, sometimes mid-story. Never start two posts with the same phrase."*
+- Fallback text on API error should not use `openers[0]`; use a neutral placeholder or surface the error cleanly
+
+**C. No structural guidance.** Posts come out as one dense block or a single sentence. Add to the system prompt:
+- *"A good post has 2–4 short paragraphs. First paragraph: one concrete observation or hook. Middle: the insight or tension — what's actually hard about this. End: what it means for practitioners, or a question that invites response."*
+- *"Vary length: some posts are 80 words and direct, some are 200–250 words and walk through reasoning. Don't always write the maximum."*
+- *"Plain text. No bullet lists. No headers. No hashtags. No emojis. Write the way a senior engineer talks to a peer, not the way a marketer writes content."*
+
 ## What's Added to openclaw.json
 
 1. `vibe-kingdom` agent definition (name, system prompt, tool command, env vars)
 2. Cron job entry: Mon/Thu 8am, isolated session, fetch+generate prompt
+
+## Container / Quadlet Architecture
+
+OpenClaw runs as user `openclaw` inside a rootless Podman container launched via a systemd quadlet. Paths like `/home/aclater/...` do not exist inside the container by default. Two things must be addressed:
+
+### Volume mounts in the quadlet unit file
+
+The quadlet (e.g. `~/.config/containers/systemd/openclaw.container`) needs two bind mounts:
+
+```ini
+[Container]
+# ...existing config...
+Volume=/home/aclater/openclaw-skills:/opt/openclaw-skills:ro,z
+Volume=/home/aclater/.openclaw/vibe-kingdom:/data/vibe-kingdom:rw,z
+```
+
+- `ro,z` on the skills directory — the container only needs to read and execute the script
+- `rw,z` on the data directory — posts.json, signals.json, config.json must be writable
+- `:z` sets the SELinux label so the container process can access the host path (required on RHEL/Fedora)
+
+After editing the quadlet, reload and restart: `systemctl --user daemon-reload && systemctl --user restart openclaw`
+
+### Tool command and data path inside openclaw.json
+
+The agent tool definition uses container-internal paths:
+
+```json
+"command": "node /opt/openclaw-skills/vibe-kingdom-openclaw/scripts/vibe-kingdom.js",
+"env": {
+  "VIBE_KINGDOM_DATA_DIR": "/data/vibe-kingdom",
+  ...
+}
+```
+
+`VIBE_KINGDOM_DATA_DIR=/data/vibe-kingdom` overrides the `os.homedir()` default so the script reads/writes to the mounted host directory regardless of which user (`openclaw`) the container runs as.
 
 ---
 
