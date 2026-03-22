@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vibe Kingdom</title>
+<style>
+/* ── Variables ─────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #f1f5f9;
+  --surface:   #ffffff;
+  --surface2:  #f8fafc;
+  --border:    #e2e8f0;
+  --text:      #0f172a;
+  --muted:     #64748b;
+  --shadow:    0 1px 3px rgba(0,0,0,.08), 0 4px 12px rgba(0,0,0,.04);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,.12);
+  --radius:    10px;
+  --radius-sm: 6px;
+  --draft:     #d97706;
+  --draft-bg:  #fef3c7;
+  --approved:  #1d4ed8;
+  --approved-bg: #dbeafe;
+  --pushed:    #059669;
+  --pushed-bg: #d1fae5;
+  --rejected:  #6b7280;
+  --rejected-bg: #f3f4f6;
+  --danger:    #dc2626;
+  --accent:    #6d28d9;
+}
+[data-theme="dark"] {
+  --bg:        #0f172a;
+  --surface:   #1e293b;
+  --surface2:  #263348;
+  --border:    #334155;
+  --text:      #f1f5f9;
+  --muted:     #94a3b8;
+  --shadow:    0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,.5);
+  --draft-bg:  rgba(217,119,6,.18);
+  --approved-bg: rgba(29,78,216,.18);
+  --pushed-bg: rgba(5,150,105,.18);
+  --rejected-bg: rgba(107,114,128,.15);
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 14px;
+  transition: background .2s, color .2s;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+header {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex; align-items: center; gap: 16px;
+  box-shadow: var(--shadow);
+}
+.brand {
+  font-size: 16px; font-weight: 700;
+  color: var(--accent); letter-spacing: -.3px;
+  white-space: nowrap;
+}
+.brand span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+.stats {
+  display: flex; gap: 8px; flex-wrap: wrap; flex: 1;
+}
+.stat-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 20px; font-size: 12px; font-weight: 500;
+  border: 1px solid transparent; cursor: default;
+}
+.stat-badge .count { font-weight: 700; font-size: 13px; }
+.stat-badge.total   { background: var(--surface2); border-color: var(--border); color: var(--muted); }
+.stat-badge.drafts  { background: var(--draft-bg); color: var(--draft); }
+.stat-badge.approved{ background: var(--approved-bg); color: var(--approved); }
+.stat-badge.pushed  { background: var(--pushed-bg); color: var(--pushed); }
+.header-actions { display: flex; gap: 8px; }
+button {
+  font: inherit; cursor: pointer; border: none;
+  border-radius: var(--radius-sm); transition: all .15s;
+}
+.btn-ghost {
+  padding: 6px 10px; background: var(--surface2);
+  border: 1px solid var(--border); color: var(--muted); font-size: 13px;
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.btn-icon { width: 32px; height: 32px; font-size: 16px;
+  display: flex; align-items: center; justify-content: center; }
+
+/* ── Load bar ──────────────────────────────────────────────────────────── */
+.load-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), #06b6d4);
+  z-index: 999; transition: opacity .3s;
+}
+.load-bar.hidden { opacity: 0; pointer-events: none; }
+
+/* ── Main Grid ─────────────────────────────────────────────────────────── */
+main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.section-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+  margin-bottom: 12px;
+}
+#posts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.empty-state {
+  grid-column: 1/-1; text-align: center;
+  padding: 64px 24px; color: var(--muted);
+}
+.empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+.empty-state p { font-size: 15px; }
+
+/* ── Cards ─────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform .15s, box-shadow .15s, border-color .15s;
+  position: relative; overflow: hidden;
+}
+.card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: var(--accent); }
+.card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.card-meta { display: flex; align-items: center; gap: 8px; }
+.post-id { font-size: 11px; font-weight: 600; color: var(--muted); }
+.source-tag {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; padding: 2px 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--muted);
+}
+.status-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; padding: 3px 8px; border-radius: 20px;
+}
+.status-draft    { background: var(--draft-bg);    color: var(--draft); }
+.status-approved { background: var(--approved-bg); color: var(--approved); }
+.status-pushed   { background: var(--pushed-bg);   color: var(--pushed); }
+.status-rejected { background: var(--rejected-bg); color: var(--rejected); }
+
+.card-title {
+  font-size: 12px; color: var(--muted); margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-preview {
+  font-size: 13px; line-height: 1.55; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+.card-footer {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.card-date { font-size: 11px; color: var(--muted); }
+
+/* ── Modal ─────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  backdrop-filter: blur(3px); z-index: 200;
+  opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+.modal-backdrop.open { opacity: 1; pointer-events: auto; }
+.modal-panel {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -48%);
+  width: min(680px, 94vw); max-height: 88vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow-lg);
+  z-index: 201; display: flex; flex-direction: column;
+  opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none;
+}
+.modal-panel.open {
+  opacity: 1; transform: translate(-50%, -50%); pointer-events: auto;
+}
+.modal-header {
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.modal-title { flex: 1; }
+.modal-title h2 { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+.modal-title .sub { font-size: 12px; color: var(--muted); }
+.modal-close {
+  width: 28px; height: 28px; border-radius: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--muted); font-size: 18px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.modal-close:hover { color: var(--danger); border-color: var(--danger); }
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+.modal-section { margin-bottom: 20px; }
+.modal-section:last-child { margin-bottom: 0; }
+.modal-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+}
+.post-content {
+  font-size: 14px; line-height: 1.65; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 14px;
+}
+.post-content.bluesky { font-size: 13px; }
+.char-count {
+  text-align: right; font-size: 11px; margin-top: 4px;
+  color: var(--muted);
+}
+.char-count.over { color: var(--danger); font-weight: 600; }
+.meta-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--muted);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-row strong { color: var(--text); min-width: 90px; font-size: 12px; }
+.meta-row a { color: var(--accent); text-decoration: none; }
+.meta-row a:hover { text-decoration: underline; }
+.modal-footer {
+  padding: 14px 20px; border-top: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: center;
+}
+.modal-footer .spacer { flex: 1; }
+
+/* ── Action Buttons ────────────────────────────────────────────────────── */
+.btn-action {
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  border-radius: var(--radius-sm); border: none;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-approve { background: var(--approved-bg); color: var(--approved); }
+.btn-approve:hover:not(:disabled) { background: var(--approved); color: #fff; }
+.btn-reject  { background: var(--rejected-bg); color: var(--rejected); }
+.btn-reject:hover:not(:disabled)  { background: var(--rejected); color: #fff; }
+.btn-push    { background: var(--pushed-bg);   color: var(--pushed); }
+.btn-push:hover:not(:disabled)    { background: var(--pushed); color: #fff; }
+.btn-action:disabled {
+  opacity: .4; cursor: not-allowed;
+}
+.btn-action.loading { opacity: .7; cursor: wait; }
+.spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  display: inline-block; animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Status message ────────────────────────────────────────────────────── */
+.modal-status {
+  font-size: 12px; padding: 6px 10px; border-radius: var(--radius-sm);
+  display: none;
+}
+.modal-status.error   { background: #fee2e2; color: var(--danger); display: block; }
+.modal-status.success { background: var(--pushed-bg); color: var(--pushed); display: block; }
+
+/* ── Toast ─────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 300;
+  background: var(--text); color: var(--surface);
+  padding: 10px 16px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500; box-shadow: var(--shadow-lg);
+  transform: translateY(10px); opacity: 0;
+  transition: transform .2s, opacity .2s; pointer-events: none;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { background: var(--pushed); }
+.toast.error   { background: var(--danger); }
+
+/* ── File loader fallback ──────────────────────────────────────────────── */
+.file-loader {
+  position: fixed; inset: 0; z-index: 400;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+}
+.file-loader.hidden { display: none; }
+.file-loader-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px; max-width: 420px; width: 90%;
+  text-align: center; box-shadow: var(--shadow-lg);
+}
+.file-loader-card h2 { font-size: 17px; margin-bottom: 8px; }
+.file-loader-card p { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+.file-input-label {
+  display: inline-block; padding: 9px 20px; cursor: pointer;
+  background: var(--accent); color: #fff; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; transition: opacity .15s;
+}
+.file-input-label:hover { opacity: .88; }
+input[type="file"] { display: none; }
+
+@media (max-width: 600px) {
+  header { padding: 12px 16px; flex-wrap: wrap; }
+  main { padding: 16px; }
+  .modal-footer { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+
+<div class="load-bar hidden" id="load-bar"></div>
+
+<header>
+  <div class="brand">Vibe Kingdom <span>Content Pipeline</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="header-actions">
+    <button class="btn-ghost btn-icon" id="theme-btn" title="Toggle theme">◐</button>
+    <button class="btn-ghost" id="refresh-btn">↻ Refresh</button>
+  </div>
+</header>
+
+<main>
+  <div class="section-label" id="grid-label">Posts</div>
+  <div id="posts-grid"></div>
+</main>
+
+<!-- Modal -->
+<div class="modal-backdrop" id="modal-backdrop"></div>
+<div class="modal-panel" id="modal-panel">
+  <div class="modal-header">
+    <div class="modal-title">
+      <h2 id="modal-heading"></h2>
+      <div class="sub" id="modal-sub"></div>
+    </div>
+    <button class="modal-close" id="modal-close">×</button>
+  </div>
+  <div class="modal-body" id="modal-body"></div>
+  <div class="modal-footer">
+    <div class="modal-status" id="modal-status"></div>
+    <div class="spacer"></div>
+    <button class="btn-action btn-reject"  id="btn-reject">❌ Reject</button>
+    <button class="btn-action btn-approve" id="btn-approve">✅ Approve</button>
+    <button class="btn-action btn-push"    id="btn-push">📤 Push to Buffer</button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- File loader fallback -->
+<div class="file-loader hidden" id="file-loader">
+  <div class="file-loader-card">
+    <div style="font-size:36px;margin-bottom:12px">👑</div>
+    <h2>Load posts.json</h2>
+    <p>No file bridge detected. Select your <code>~/.openclaw/vibe-kingdom/posts.json</code> to continue.</p>
+    <label class="file-input-label">
+      Browse File
+      <input type="file" id="file-input" accept=".json,application/json">
+    </label>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════════
+   BRIDGE — adapt this section for your OpenClaw environment.
+
+   OpenClaw should expose:
+     window.__vk_load_posts__()               → Promise<Array>
+     window.__vk_run_command__(cmd: string)   → Promise<{ok, output, error}>
+
+   If these aren't available, the dashboard falls back to a file picker
+   (read-only; commands will show the equivalent CLI text).
+═══════════════════════════════════════════════════════════════════════ */
+const Bridge = {
+  async loadPosts() {
+    // 1. OpenClaw native bridge
+    if (typeof window.__vk_load_posts__ === 'function') {
+      return window.__vk_load_posts__();
+    }
+
+    // 2. Try local fetch paths (if OpenClaw serves from a local endpoint)
+    const fetchPaths = [
+      '/vibe-kingdom/posts.json',
+      './posts.json',
+      '/posts.json',
+    ];
+    for (const path of fetchPaths) {
+      try {
+        const r = await fetch(path, { cache: 'no-store' });
+        if (r.ok) return r.json();
+      } catch (_) {}
+    }
+
+    // 3. Manual file picker
+    return promptFilePicker();
+  },
+
+  async runCommand(cmd) {
+    if (typeof window.__vk_run_command__ === 'function') {
+      return window.__vk_run_command__(cmd);
+    }
+    // No bridge available — throw with the CLI equivalent so UI can surface it
+    throw new BridgeError(cmd);
+  }
+};
+
+class BridgeError extends Error {
+  constructor(cmd) {
+    super(`No command bridge. Run manually:\nvibe-kingdom.js ${cmd}`);
+    this.cmd = cmd;
+    this.isBridgeError = true;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════════════════ */
+let posts = [];
+let activePostId = null;
+
+function getStatus(post) {
+  if (post.status === 'rejected') return 'rejected';
+  if (post.status === 'approved' && post.scheduled_at) return 'pushed';
+  if (post.status === 'approved') return 'approved';
+  return 'draft';
+}
+
+function statusLabel(s) {
+  return { draft: 'Draft', approved: 'Approved', pushed: 'Scheduled', rejected: 'Rejected' }[s] || s;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LOAD / REFRESH
+═══════════════════════════════════════════════════════════════════════ */
+async function loadData() {
+  showLoadBar(true);
+  try {
+    posts = await Bridge.loadPosts();
+    if (!Array.isArray(posts)) posts = [];
+    render();
+  } catch (e) {
+    showToast('Failed to load posts: ' + e.message, 'error');
+  } finally {
+    showLoadBar(false);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RENDER
+═══════════════════════════════════════════════════════════════════════ */
+function render() {
+  renderStats();
+  renderGrid();
+}
+
+function renderStats() {
+  const counts = { draft: 0, approved: 0, pushed: 0 };
+  posts.forEach(p => {
+    const s = getStatus(p);
+    if (s in counts) counts[s]++;
+  });
+  document.getElementById('stats').innerHTML = `
+    <span class="stat-badge total"><span class="count">${posts.length}</span> total</span>
+    <span class="stat-badge drafts"><span class="count">${counts.draft}</span> drafts</span>
+    <span class="stat-badge approved"><span class="count">${counts.approved}</span> approved</span>
+    <span class="stat-badge pushed"><span class="count">${counts.pushed}</span> scheduled</span>
+  `;
+}
+
+function renderGrid() {
+  const grid = document.getElementById('posts-grid');
+  if (!posts.length) {
+    grid.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No posts yet. Run <strong>fetch-signals</strong> then <strong>generate-posts</strong> to get started.</p></div>`;
+    return;
+  }
+
+  // Sort: drafts first, then approved, then pushed, then rejected
+  const order = { draft: 0, approved: 1, pushed: 2, rejected: 3 };
+  const sorted = [...posts].sort((a, b) => {
+    const sa = getStatus(a), sb = getStatus(b);
+    return (order[sa] ?? 9) - (order[sb] ?? 9) || a.id - b.id;
+  });
+
+  grid.innerHTML = sorted.map(post => {
+    const st = getStatus(post);
+    const preview = (post.content || '').replace(/\n+/g, ' ').substring(0, 120);
+    const date = post.scheduled_at
+      ? `📅 ${fmtDate(post.scheduled_at)}`
+      : post.created_at
+        ? fmtDate(post.created_at, true)
+        : '';
+    return `
+      <div class="card" data-id="${post.id}" role="button" tabindex="0" aria-label="Post ${post.id}">
+        <div class="card-top">
+          <div class="card-meta">
+            <span class="post-id">#${post.id}</span>
+            <span class="source-tag">${esc(post.signal_source || 'manual')}</span>
+          </div>
+          <span class="status-badge status-${st}">${statusLabel(st)}</span>
+        </div>
+        <div class="card-title">${esc(post.signal_title || 'Untitled')}</div>
+        <div class="card-preview">${esc(preview)}${preview.length >= 120 ? '…' : ''}</div>
+        <div class="card-footer">
+          <span class="card-date">${date}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  grid.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', () => openModal(parseInt(card.dataset.id)));
+    card.addEventListener('keydown', e => e.key === 'Enter' && openModal(parseInt(card.dataset.id)));
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MODAL
+═══════════════════════════════════════════════════════════════════════ */
+function openModal(id) {
+  const post = posts.find(p => p.id === id);
+  if (!post) return;
+  activePostId = id;
+  renderModalContent(post);
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('modal-panel').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+  document.getElementById('modal-panel').classList.remove('open');
+  document.body.style.overflow = '';
+  activePostId = null;
+}
+
+function renderModalContent(post) {
+  const st = getStatus(post);
+  document.getElementById('modal-heading').textContent = `Post #${post.id} — ${post.signal_title || 'Untitled'}`;
+  document.getElementById('modal-sub').innerHTML =
+    `<span class="status-badge status-${st}">${statusLabel(st)}</span>
+     <span style="margin-left:8px;color:var(--muted);font-size:12px">${esc(post.signal_source || 'manual')}</span>`;
+
+  const bsLen = (post.bluesky_content || '').length;
+  const bsOver = bsLen > 300;
+
+  document.getElementById('modal-body').innerHTML = `
+    <div class="modal-section">
+      <div class="modal-label">LinkedIn Post</div>
+      <div class="post-content">${esc(post.content || '')}</div>
+    </div>
+    ${post.bluesky_content ? `
+    <div class="modal-section">
+      <div class="modal-label">Bluesky Post</div>
+      <div class="post-content bluesky">${esc(post.bluesky_content)}</div>
+      <div class="char-count ${bsOver ? 'over' : ''}">${bsLen}/300 chars${bsOver ? ' ⚠ over limit' : ''}</div>
+    </div>` : ''}
+    <div class="modal-section">
+      <div class="modal-label">Details</div>
+      ${post.signal_url ? `<div class="meta-row"><strong>Source</strong><a href="${esc(post.signal_url)}" target="_blank" rel="noopener">${esc(post.signal_url)}</a></div>` : ''}
+      ${post.scheduled_at ? `<div class="meta-row"><strong>Scheduled</strong>${fmtDate(post.scheduled_at)}</div>` : ''}
+      ${post.created_at   ? `<div class="meta-row"><strong>Created</strong>${fmtDate(post.created_at, true)}</div>` : ''}
+      ${(post.buffer_update_ids || []).length ? `<div class="meta-row"><strong>Channels</strong>${post.buffer_update_ids.length} channel${post.buffer_update_ids.length > 1 ? 's' : ''}</div>` : ''}
+    </div>
+  `;
+
+  setModalStatus('');
+  updateModalButtons(post);
+}
+
+function updateModalButtons(post) {
+  const st = getStatus(post);
+  const btnApprove = document.getElementById('btn-approve');
+  const btnReject  = document.getElementById('btn-reject');
+  const btnPush    = document.getElementById('btn-push');
+
+  // Approve: only for drafts
+  btnApprove.disabled = (st !== 'draft');
+
+  // Reject: available for draft or approved (not already pushed/rejected)
+  btnReject.disabled = (st === 'pushed' || st === 'rejected');
+
+  // Push: only if approved (not already pushed)
+  btnPush.disabled = (st !== 'approved');
+  if (st !== 'approved') {
+    btnPush.title = st === 'draft'
+      ? 'Approve the post first before pushing to Buffer'
+      : st === 'pushed' ? 'Already scheduled in Buffer' : '';
+  } else {
+    btnPush.title = '';
+  }
+}
+
+function setModalStatus(msg, type = '') {
+  const el = document.getElementById('modal-status');
+  el.textContent = msg;
+  el.className = 'modal-status' + (type ? ' ' + type : '');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACTIONS
+═══════════════════════════════════════════════════════════════════════ */
+async function runAction(btnEl, cmd, optimisticUpdate) {
+  btnEl.disabled = true;
+  const origHTML = btnEl.innerHTML;
+  btnEl.innerHTML = `<span class="spinner"></span> Working…`;
+  btnEl.classList.add('loading');
+  setModalStatus('');
+
+  try {
+    await Bridge.runCommand(cmd);
+    optimisticUpdate();
+    const post = posts.find(p => p.id === activePostId);
+    if (post) {
+      renderModalContent(post);
+      render();
+    }
+    showToast('Done.', 'success');
+  } catch (e) {
+    if (e.isBridgeError) {
+      setModalStatus(`No bridge available. Run: vibe-kingdom.js ${e.cmd}`, 'error');
+    } else {
+      setModalStatus(e.message, 'error');
+    }
+    showToast(e.message.split('\n')[0], 'error');
+    btnEl.disabled = false;
+  } finally {
+    btnEl.innerHTML = origHTML;
+    btnEl.classList.remove('loading');
+    updateModalButtons(posts.find(p => p.id === activePostId) || {});
+  }
+}
+
+function handleApprove() {
+  const id = activePostId;
+  runAction(document.getElementById('btn-approve'), `approve ${id}`, () => {
+    const post = posts.find(p => p.id === id);
+    if (post) post.status = 'approved';
+  });
+}
+
+function handleReject() {
+  const id = activePostId;
+  runAction(document.getElementById('btn-reject'), `reject ${id}`, () => {
+    const post = posts.find(p => p.id === id);
+    if (post) post.status = 'rejected';
+  });
+}
+
+function handlePush() {
+  const id = activePostId;
+  const post = posts.find(p => p.id === id);
+  if (!post || getStatus(post) !== 'approved') {
+    setModalStatus('Post must be approved before pushing to Buffer.', 'error');
+    return;
+  }
+  runAction(document.getElementById('btn-push'), `push ${id}`, () => {
+    // Optimistic: mark as if scheduled (actual scheduled_at comes from next refresh)
+    if (post) post._optimistic_pushed = true;
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════════════════════════════════ */
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso, compact = false) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (compact) {
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    return d.toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+    });
+  } catch (_) { return iso; }
+}
+
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+function showLoadBar(on) {
+  document.getElementById('load-bar').classList.toggle('hidden', !on);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   FILE PICKER FALLBACK
+═══════════════════════════════════════════════════════════════════════ */
+let filePickerResolve = null;
+
+function promptFilePicker() {
+  return new Promise((resolve, reject) => {
+    document.getElementById('file-loader').classList.remove('hidden');
+    filePickerResolve = resolve;
+  });
+}
+
+document.getElementById('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      document.getElementById('file-loader').classList.add('hidden');
+      if (filePickerResolve) filePickerResolve(data);
+    } catch (_) {
+      showToast('Invalid JSON file.', 'error');
+    }
+  };
+  reader.readAsText(file);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THEME
+═══════════════════════════════════════════════════════════════════════ */
+function initTheme() {
+  const saved = localStorage.getItem('vk-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  setTheme(saved || (prefersDark ? 'dark' : 'light'));
+}
+
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('vk-theme', t);
+  document.getElementById('theme-btn').textContent = t === 'dark' ? '☀︎' : '◐';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   EVENT WIRING
+═══════════════════════════════════════════════════════════════════════ */
+document.getElementById('refresh-btn').addEventListener('click', loadData);
+document.getElementById('theme-btn').addEventListener('click', () => {
+  setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+});
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-backdrop').addEventListener('click', closeModal);
+document.getElementById('btn-approve').addEventListener('click', handleApprove);
+document.getElementById('btn-reject').addEventListener('click', handleReject);
+document.getElementById('btn-push').addEventListener('click', handlePush);
+document.addEventListener('keydown', e => e.key === 'Escape' && closeModal());
+
+/* ═══════════════════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════════════════ */
+initTheme();
+loadData();
+</script>
+</body>
+</html>
