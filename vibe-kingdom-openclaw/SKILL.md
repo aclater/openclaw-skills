@@ -17,18 +17,18 @@ Approval and publishing are separate steps:
 ## Commands
 
 ```bash
-node scripts/vibe-kingdom.js fetch-signals              # Discover signals from communities
-node scripts/vibe-kingdom.js generate-posts [--count N] # Generate N draft posts (default 5)
-node scripts/vibe-kingdom.js list-posts [--status S]    # List posts with scheduled times
-node scripts/vibe-kingdom.js show-post <id>             # View full post content
-node scripts/vibe-kingdom.js approve <id>               # Mark post as approved (no Buffer push)
-node scripts/vibe-kingdom.js approve-all [--count N]    # Mark up to N drafts approved (default 3)
-node scripts/vibe-kingdom.js reject <id>                # Reject a draft
-node scripts/vibe-kingdom.js push <id>           # Push approved post to Buffer
-node scripts/vibe-kingdom.js set-status <id> <status>   # Update status only (no Buffer push)
-node scripts/vibe-kingdom.js regenerate-post <id>       # Regenerate with new angle
-node scripts/vibe-kingdom.js rebuild-profile            # Refresh Speaker Profile
-node scripts/vibe-kingdom.js show-config                # Show configuration
+scripts/vibe_kingdom.py fetch-signals              # Discover signals from communities
+scripts/vibe_kingdom.py generate-posts [--count N] # Generate N draft posts (default 5)
+scripts/vibe_kingdom.py list-posts [--status S]    # List posts with scheduled times
+scripts/vibe_kingdom.py show-post <id>             # View full post content
+scripts/vibe_kingdom.py approve <id>               # Mark post as approved (no Buffer push)
+scripts/vibe_kingdom.py approve-all [--count N]    # Mark up to N drafts approved (default 3)
+scripts/vibe_kingdom.py reject <id>                # Reject a draft
+scripts/vibe_kingdom.py push <id>                  # Push approved post to Buffer
+scripts/vibe_kingdom.py set-status <id> <status>   # Update status only (no Buffer push)
+scripts/vibe_kingdom.py regenerate-post <id>       # Regenerate with new angle
+scripts/vibe_kingdom.py rebuild-profile            # Refresh Speaker Profile
+scripts/vibe_kingdom.py show-config                # Show configuration
 ```
 
 ## Required Environment Variables
