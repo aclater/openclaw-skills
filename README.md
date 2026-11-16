@@ -2,6 +2,36 @@
 
 A collection of specialized skills for OpenClaw agents. These skills extend the capabilities of OpenClaw with domain-specific knowledge, automation, and intelligence.
 
+## Quick start
+
+You need Node.js 16 or later and git. This runs the calendar-briefing skill on its own, with no API key, against
+Google's public calendar of US holidays.
+
+1. Get the skills and create the calendar-briefing configuration:
+
+   ```
+   git clone https://github.com/aclater/openclaw-skills.git
+   cd openclaw-skills
+   node calendar-briefing/scripts/calendar-briefing.js setup
+   ```
+
+2. Point it at the holiday calendar:
+
+   ```
+   sed -i 's|"iCalUrl": ""|"iCalUrl": "https://calendar.google.com/calendar/ical/en.usa%23holiday%40group.v.calendar.google.com/public/basic.ics"|' ~/.openclaw/calendar-briefing/config.json
+   ```
+
+3. Get a briefing for the week of US Thanksgiving 2026:
+
+   ```
+   node calendar-briefing/scripts/calendar-briefing.js briefing --date 2026-11-23
+   ```
+
+   Thursday and Friday show one engagement each. Without `--date` you get today's briefing.
+
+To use your own calendar, put its secret iCal address in `~/.openclaw/calendar-briefing/config.json` instead; `setup`
+prints where to find it. Each skill's `SKILL.md` covers its setup and commands.
+
 ## Skills
 
 ### 1. tavily-search
@@ -72,7 +102,7 @@ Get your daily schedule delivered as conversation, not a list. Choose your perso
 
 ---
 
-## Getting Started
+## Usage
 
 ### Install a Skill
 
